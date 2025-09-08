@@ -294,28 +294,12 @@ function groupRows(rows, cfg = {}) {
   const out = [];
   for (const { dims, acc } of groups.values()) {
     const row = { ...dims };
-    // finalize base
-    // for (const b of baseAggs) {
-    //   row[b.as] = finalizeAccumulator(acc[b.as], b.fn);
-    // }
 
     for (const b of baseAggs) {
       const value = finalizeAccumulator(acc[b.as], b.fn);
       if (String(b.as).includes(".")) setAtPath(row, b.as, value);
       else row[b.as] = value;
     }
-    // derived
-    // for (const d of derivedAggs) {
-    //   if (d.fn === "RATIO") {
-    //     const num = row[d.spec.num];
-    //     const den = row[d.spec.den];
-    //     row[d.as] = safeDivide(num, den, 0);
-    //   } else if (d.fn === "MICROS_TO_UNITS") {
-    //     const src = row[d.spec.src];
-    //     const n = Number(src);
-    //     row[d.as] = Number.isFinite(n) ? n / 1_000_000 : null;
-    //   }
-    // }
 
     for (const d of derivedAggs) {
       let value = null;

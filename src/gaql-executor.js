@@ -19,7 +19,10 @@ class GAQLExecutor {
         constraints: options.report?.constraints,
         from_date: options.report?.from_date,
         to_date: options.report?.to_date,
-        limit: options.report?.limit
+        limit: options.report?.limit,
+        order: options.report?.order,
+        parameters: options.report?.parameters,
+        search_settings: options.report?.search_settings
       },
       credentials: {
         developerToken: options.credentials?.developerToken,
@@ -60,21 +63,105 @@ class GAQLExecutor {
     return this.client;
   }
 
-  runPipeline(rows) {
-    const { pipeline = [] } = this.options;
-    console.log('🔍 Pipeline:', pipeline);
-    if (!Array.isArray(pipeline) || pipeline.length === 0) return rows;
-  
+  isCardinalityChanging(name) {
+    const fn = name && STEPS[name];
+    return !!(fn && fn.traits && fn.traits.changesCardinality);
+  }
+
+  buildContext(customer) {
+    const pipeline = Array.isArray(this.options.pipeline) ? this.options.pipeline : [];
+    const baseReport = this.clone(this.options.report);
+    const baseQuery = this.clone(this.options.query?.gaql) || null;
+
+    const state = Object.create(null);
+    const cache = new Map();
+
+    // run a concrete list of steps (used by runPre, and available to steps)
+    const runWithSteps = async (rows, steps) => {
+      let out = rows;
+      for (const step of steps || []) {
+        const fn = step && step.use && STEPS[step.use];
+        if (typeof fn === "function") {
+          out = await fn(out, step, ctx);
+        }
+      }
+      return out;
+    }
+
+    const ctx = {
+      options: this.options,
+      state,
+      cache,
+      runPre: async (rows) => {
+        const pre = state.preStepsExecuted || [];
+        return runWithSteps(rows, pre);
+      },
+      fetch: async (overrides = {}, tag = "default") => {
+        const key = JSON.stringify({
+          tag,
+          report: this.mergeReportOptions(baseReport, overrides),
+          gaql: baseQuery ? (overrides.gaql || baseQuery) : null
+        });
+        
+        if (cache.has(key)) {
+          return cache.get(key);
+        }
+
+        let rows;
+        if(baseReport?.entity) {
+          rows = await customer.report(this.mergeReportOptions(baseReport, overrides));
+        } else if (baseQuery) {
+          const gaql = overrides.gaql || baseQuery;
+          rows = await customer.query(gaql);
+        } else {
+          throw new Error("No report entity or GAQL query configured.");
+        }
+       
+        cache.set(key, rows);
+        return rows;
+      },
+
+      // expose for advanced usage (rare)
+      runWithSteps
+    };
+
+    ctx._freezePre = (executedPre) => { state.preStepsExecuted = executedPre.slice(); };
+
+    return ctx;    
+  }
+
+  // Async aware pipeline
+  async runPipeline(rows, ctx) {
+    const pipeline = Array.isArray(this.options.pipeline) ? this.options.pipeline : [];
+    if (pipeline.length === 0) return rows;
+
     let out = rows;
+    const executedPre = [];
+    let boundaryFrozen = false;
+
     for (const step of pipeline) {
       const fn = step && step.use && STEPS[step.use];
-      if (typeof fn === "function") {
-        out = fn(out, step, { options: this.options });
+      if(typeof fn !== "function") continue;
+
+      if(!boundaryFrozen && !this.isCardinalityChanging(step.use)) {
+        // still in pre phase
+        executedPre.push(step);
+      } else if (!boundaryFrozen && this.isCardinalityChanging(step.use)) {
+        // crossing the boundary for the first time -- freeze the pre list
+        ctx._freezePre(executedPre);
+        boundaryFrozen = true;
       }
+
+      out = await fn(out, step, ctx); // supports async steps
     }
+
+    
+    // last check -- if we didn’t freeze the pre list, do it now
+    if (!boundaryFrozen) ctx._freezePre(executedPre);
+    
+    // console.log("pre steps executed:", (ctx.state.preStepsExecuted || []).map(s => s.use));
     return out;
   }
-  
 
   /**
    * Create a customer instance with serialization hook
@@ -87,17 +174,8 @@ class GAQLExecutor {
       throw new Error('Customer ID is required in options.credentials.customerId');
     }
 
-    // Hook for automatic serialization
-    const onQueryEnd = ({ response, resolve }) => {
-      
-      try {
-        const processed = this.runPipeline(response);  // ← pipeline here
-        resolve(processed);
-      } catch (err) {
-        console.warn("Pipeline failed, returning raw:", err.message);
-        resolve(response);
-      }
-    };
+    // IMPORTANT: return RAW rows; pipeline runs in execute()
+    const onQueryEnd = ({ response, resolve }) => resolve(response);
 
     const customer = this.client.Customer({
       customer_id: customerId,
@@ -106,6 +184,19 @@ class GAQLExecutor {
     }, { onQueryEnd });
 
     return customer;
+  }
+
+  clone(x) { return x == null ? x : JSON.parse(JSON.stringify(x)); }
+
+  mergeReportOptions(base, overrides = {}) {
+    const merged = this.clone(base) || {};
+    const allow = [
+      "date_constant", "from_date", "to_date", "constraints",
+      "limit", "order", "parameters", "search_settings"
+    ]
+    for (const k of allow) if (k in overrides && overrides[k] !== undefined) merged[k] = overrides[k];
+
+    return merged;
   }
 
   /**
@@ -157,20 +248,22 @@ class GAQLExecutor {
     
     // Create customer instance with serialization hook
     const customer = this.createCustomer();
+
+    let rawRows;
     
     try {
       // Check if we have report options (preferred method)
       if (this.options.report.entity) {
-        return await customer.report(this.options.report);
+        rawRows = await customer.report(this.options.report);
+      } else {
+        const gaqlQuery = this.options.query?.gaql;
+        if (!gaqlQuery) throw new Error("Either report options or GAQL query is required");
+        rawRows = await customer.query(gaqlQuery);
       }
-      
-      // Fall back to GAQL query if no report options
-      const gaqlQuery = this.options.query.gaql;
-      if (!gaqlQuery) {
-        throw new Error('Either report options or GAQL query is required');
-      }
-      
-      return await customer.query(gaqlQuery);
+
+      const ctx = this.buildContext(customer);
+      const result = await this.runPipeline(rawRows, ctx);
+      return result;
     } catch (error) {
       console.error('Full error object:', error);
       console.error('Error message:', error.message);

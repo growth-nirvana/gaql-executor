@@ -14,6 +14,7 @@ function reverse(e) {
 const ENUM_MAPS = {
   "campaign.status": reverse(enums.CampaignStatus),
   "campaign.bidding_strategy_type": reverse(enums.BiddingStrategyType),
+  "campaign.advertising_channel_type": reverse(enums.AdvertisingChannelType),
   "ad_group.status": reverse(enums.AdGroupStatus),
   "ad_group_criterion.status": reverse(enums.AdGroupCriterionStatus),
   "ad_group_ad.status": reverse(enums.AdGroupAdStatus),

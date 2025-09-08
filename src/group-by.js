@@ -295,51 +295,87 @@ function groupRows(rows, cfg = {}) {
   for (const { dims, acc } of groups.values()) {
     const row = { ...dims };
     // finalize base
+    // for (const b of baseAggs) {
+    //   row[b.as] = finalizeAccumulator(acc[b.as], b.fn);
+    // }
+
     for (const b of baseAggs) {
-      row[b.as] = finalizeAccumulator(acc[b.as], b.fn);
+      const value = finalizeAccumulator(acc[b.as], b.fn);
+      if (String(b.as).includes(".")) setAtPath(row, b.as, value);
+      else row[b.as] = value;
     }
     // derived
+    // for (const d of derivedAggs) {
+    //   if (d.fn === "RATIO") {
+    //     const num = row[d.spec.num];
+    //     const den = row[d.spec.den];
+    //     row[d.as] = safeDivide(num, den, 0);
+    //   } else if (d.fn === "MICROS_TO_UNITS") {
+    //     const src = row[d.spec.src];
+    //     const n = Number(src);
+    //     row[d.as] = Number.isFinite(n) ? n / 1_000_000 : null;
+    //   }
+    // }
+
     for (const d of derivedAggs) {
+      let value = null;
+    
       if (d.fn === "RATIO") {
-        const num = row[d.spec.num];
-        const den = row[d.spec.den];
-        row[d.as] = safeDivide(num, den, 0);
+        const num = getAtPath(row, d.spec.num);
+        const den = getAtPath(row, d.spec.den);
+        value = safeDivide(num, den, 0);
       } else if (d.fn === "MICROS_TO_UNITS") {
-        const src = row[d.spec.src];
+        const src = getAtPath(row, d.spec.src);
         const n = Number(src);
-        row[d.as] = Number.isFinite(n) ? n / 1_000_000 : null;
+        value = Number.isFinite(n) ? n / 1_000_000 : null;
       }
-    }
+    
+      if (String(d.as).includes(".")) setAtPath(row, d.as, value);
+      else row[d.as] = value;
+    }   
     out.push(row);
   }
 
   // 6) rollup (grand total)
   if (rollup && out.length) {
     const total = {};
-    // Sum numeric bases, then re-derive RATIO using summed num/den if available
+  
     for (const b of baseAggs) {
-      const isCount = b.fn === "COUNT";
-      const canSum = ["SUM", "COUNT"].includes(b.fn);
-      if (canSum) {
-        total[b.as] = out.reduce((s, r) => s + (Number(r[b.as]) || 0), 0);
-      } else if (b.fn === "AVG") {
-        // weighted by counts: we don't have per-group counts for AVG; skip by default
-        total[b.as] = null;
-      } else if (b.fn === "MIN") {
-        total[b.as] = out.reduce((m, r) => (m == null || r[b.as] < m ? r[b.as] : m), null);
-      } else if (b.fn === "MAX") {
-        total[b.as] = out.reduce((m, r) => (m == null || r[b.as] > m ? r[b.as] : m), null);
+      const asPath = b.as;
+      const fn = b.fn;
+  
+      if (["SUM", "COUNT"].includes(fn)) {
+        const sum = out.reduce((s, r) => s + (Number(getAtPath(r, asPath)) || 0), 0);
+        if (String(asPath).includes(".")) setAtPath(total, asPath, sum);
+        else total[asPath] = sum;
+      } else if (fn === "MIN") {
+        const min = out.reduce((m, r) => {
+          const v = getAtPath(r, asPath);
+          return m == null || v < m ? v : m;
+        }, null);
+        String(asPath).includes(".") ? setAtPath(total, asPath, min) : (total[asPath] = min);
+      } else if (fn === "MAX") {
+        const max = out.reduce((m, r) => {
+          const v = getAtPath(r, asPath);
+          return m == null || v > m ? v : m;
+        }, null);
+        String(asPath).includes(".") ? setAtPath(total, asPath, max) : (total[asPath] = max);
       } else {
-        total[b.as] = isCount ? out.reduce((s, r) => s + (Number(r[b.as]) || 0), 0) : null;
+        // AVG etc. – leave null by default or implement weighted logic
+        String(asPath).includes(".") ? setAtPath(total, asPath, null) : (total[asPath] = null);
       }
     }
+  
+    // derived on rollup
     for (const d of derivedAggs) {
+      let value = null;
       if (d.fn === "RATIO") {
-        total[d.as] = safeDivide(total[d.spec.num], total[d.spec.den], 0);
+        value = safeDivide(getAtPath(total, d.spec.num), getAtPath(total, d.spec.den), 0);
       } else if (d.fn === "MICROS_TO_UNITS") {
-        const n = Number(total[d.spec.src]);
-        total[d.as] = Number.isFinite(n) ? n / 1_000_000 : null;
+        const n = Number(getAtPath(total, d.spec.src));
+        value = Number.isFinite(n) ? n / 1_000_000 : null;
       }
+      String(d.as).includes(".") ? setAtPath(total, d.as, value) : (total[d.as] = value);
     }
     out.push({ ...(timeBucket ? { [timeBucketKey]: "ALL" } : {}), ...total, __rollup: true });
   }

@@ -32,7 +32,11 @@ class GAQLExecutor {
         customerId: options.credentials?.customerId,
         loginCustomerId: options.credentials?.loginCustomerId
       },
-      pipeline: Array.isArray(options.pipeline) ? options.pipeline : []
+      pipeline: Array.isArray(options.pipeline) ? options.pipeline : [],
+      output: {
+        mode: (options.output && options.output.mode) || "rows",
+        include: (options.output && options.output.include) || ["periods"]
+      }
     };
     this.client = null;
   }
@@ -128,6 +132,33 @@ class GAQLExecutor {
     ctx._freezePre = (executedPre) => { state.preStepsExecuted = executedPre.slice(); };
 
     return ctx;    
+  }
+
+  collectMeta(ctx, output = {}) {
+    const include = output.include || ["periods"]; // extensible
+    const meta = {};
+  
+    if (include.includes("periods") && ctx?.state?.periods) {
+      meta.periods = ctx.state.periods;
+    }
+    // Optional future toggles:
+    if (include.includes("group") && ctx?.state?.lastGroupCfg) {
+      meta.group = ctx.state.lastGroupCfg;
+    }
+    if (include.includes("report")) {
+      const { report } = this.options || {};
+      if (report) {
+        // keep it light; avoid dumping entire object
+        meta.report = {
+          entity: report.entity,
+          from_date: report.from_date,
+          to_date: report.to_date,
+          constraints: report.constraints,
+          order: report.order
+        };
+      }
+    }
+    return meta;
   }
 
   // Async aware pipeline
@@ -245,14 +276,14 @@ class GAQLExecutor {
   async execute() {
     // Initialize client lazily
     this.initializeClient();
-    
-    // Create customer instance with serialization hook
+  
+    // Create customer instance with serialization hook (returns RAW rows)
     const customer = this.createCustomer();
-
+  
     let rawRows;
-    
+  
     try {
-      // Check if we have report options (preferred method)
+      // 1) Fetch current-period rows
       if (this.options.report.entity) {
         rawRows = await customer.report(this.options.report);
       } else {
@@ -260,10 +291,21 @@ class GAQLExecutor {
         if (!gaqlQuery) throw new Error("Either report options or GAQL query is required");
         rawRows = await customer.query(gaqlQuery);
       }
-
+  
+      // 2) Build ctx (gives steps access to fetch(), runPre(), periods, etc.)
       const ctx = this.buildContext(customer);
+  
+      // 3) Run the pipeline (steps operate on plain arrays, as before)
       const result = await this.runPipeline(rawRows, ctx);
+  
+      // 4) Wrap output if requested; otherwise return rows (backward compatible)
+      const { output } = this.options || {};
+      if (output && output.mode === "envelope") {
+        const meta = this.collectMeta(ctx, output);
+        return { meta, results: result };
+      }
       return result;
+  
     } catch (error) {
       console.error('Full error object:', error);
       console.error('Error message:', error.message);

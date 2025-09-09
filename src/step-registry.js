@@ -4,6 +4,9 @@ const { groupRows } = require("./group-by");
 const { deltaAugment } = require("./delta");
 const { periodsStep } = require("./periods");
 const { attachPeriodsMetaStep } = require("./attach-periods-meta");
+const { shareOfStep } = require("./share-of");
+const { statsStep } = require("./stats");
+const { deriveDimensionStep } = require("./derive-dimension");
 
 function withTraits(fn, traits) {
   fn.traits = traits;
@@ -16,6 +19,7 @@ const STEPS = {
     (rows, cfg, ctx) => periodsStep(rows, cfg, ctx),
     { phase: "pre", changesCardinality: false }
   ),
+  deriveDimension: withTraits((rows, cfg) => deriveDimensionStep(rows, cfg), { phase: "pre", changesCardinality: false }),
   statusesReadable: withTraits(
     (rows /*, cfg, ctx */) => makeStatusesReadable(rows),
     { phase: "pre", changesCardinality: false }
@@ -41,7 +45,11 @@ const STEPS = {
   attachPeriodsMeta: withTraits(
     (rows, cfg, ctx) => attachPeriodsMetaStep(rows, cfg, ctx),
     { phase: "post", changesCardinality: false }
-  )
+  ),
+  shareOf: withTraits((rows, cfg) => shareOfStep(rows, cfg), { phase: "post", changesCardinality: false }),
+  stats:   withTraits((rows, cfg) => statsStep(rows, cfg),   { phase: "post", changesCardinality: false }),
+  percentileRank: withTraits((rows, cfg) => percentileRankStep(rows, cfg), { phase: "post", changesCardinality: false }),
+  zScore: withTraits((rows, cfg) => zScoreStep(rows, cfg), { phase: "post", changesCardinality: false }),
 };
 
 module.exports = { STEPS };

@@ -40,20 +40,30 @@ function safeDivide(n, d, onZero = null) {
   return nn / dd;
 }
 
-// ----- previous-period date helpers -----
+// ----- date helpers -----
 function parseYmd(s) {
-  // Expect "YYYY-MM-DD"
   if (typeof s !== "string") return null;
   const [y, m, d] = s.split("-").map(Number);
   if (!y || !m || !d) return null;
-  // force UTC midnight
-  return new Date(Date.UTC(y, m - 1, d));
+  return new Date(Date.UTC(y, m - 1, d)); // UTC midnight
 }
 function formatYmd(d) {
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+function lastDayOfMonthUTC(year, monthIndex0) {
+  // monthIndex0: 0..11
+  return new Date(Date.UTC(year, monthIndex0 + 1, 0)).getUTCDate();
+}
+function shiftYearClamp(d, deltaYears) {
+  const y = d.getUTCFullYear() + deltaYears;
+  const m = d.getUTCMonth();
+  const dom = d.getUTCDate();
+  const maxDom = lastDayOfMonthUTC(y, m);
+  const safeDom = Math.min(dom, maxDom);
+  return new Date(Date.UTC(y, m, safeDom));
 }
 function prevRangeSameLength(from_date, to_date) {
   const from = parseYmd(from_date);
@@ -64,72 +74,86 @@ function prevRangeSameLength(from_date, to_date) {
   const prevFrom = new Date(prevTo.getTime() - (lenDays - 1) * 86400000);
   return { from_date: formatYmd(prevFrom), to_date: formatYmd(prevTo) };
 }
+function prevYearSameSpan(from_date, to_date) {
+  const from = parseYmd(from_date);
+  const to = parseYmd(to_date);
+  if (!from || !to) return null;
+  const pf = shiftYearClamp(from, -1);
+  const pt = shiftYearClamp(to, -1);
+  return { from_date: formatYmd(pf), to_date: formatYmd(pt) };
+}
+
+// Decide baseline window based on cfg + report dates
+function resolveBaseline(report, cfg) {
+  const explicit = cfg?.baseline;
+  if (explicit?.from_date && explicit?.to_date) {
+    return { from_date: explicit.from_date, to_date: explicit.to_date };
+  }
+
+  const mode = (explicit?.mode || "previous_period").toLowerCase();
+  const from = report?.from_date;
+  const to = report?.to_date;
+
+  if (!from || !to) return null; // we don’t try to derive from date_constant yet
+
+  if (mode === "previous_year" || mode === "yoy") {
+    return prevYearSameSpan(from, to);
+  }
+  // default
+  return prevRangeSameLength(from, to);
+}
 
 // ----- main step (augment mode) -----
 /**
- * cfg signature (minimal):
+ * cfg:
  * {
- *   // optional: explicit baseline; if omitted we compute previous using report.from_date/to_date
- *   baseline?: { from_date: "YYYY-MM-DD", to_date: "YYYY-MM-DD" },
- *
- *   // optional: join keys; if omitted, we derive from ctx.state.lastGroupCfg (by + timeBucket)
- *   keys?: string[],
- *
- *   // which measures to delta
+ *   baseline?: {
+ *     mode?: "previous_period" | "previous_year" | "yoy",
+ *     from_date?: "YYYY-MM-DD", to_date?: "YYYY-MM-DD"
+ *   },
+ *   keys?: string[],                 // else inferred from prior group (by + timeBucket)
  *   measures: [
  *     { field: "metrics.cost", kind: "absolute" },
  *     { field: "metrics.clicks", kind: "absolute" },
  *     { field: "metrics.impressions", kind: "absolute" },
- *     // ratios recomputed from bases (recommended)
  *     { field: "metrics.ctr", kind: "ratio", num: "metrics.clicks", den: "metrics.impressions" },
  *     { field: "metrics.cpc", kind: "ratio", num: "metrics.cost",   den: "metrics.clicks" }
  *   ],
- *
- *   // output namespaces (augment mode)
  *   emit?: {
  *     previous?: "metrics_prev",
  *     delta_abs?: "metrics_delta",
  *     delta_pct?: "metrics_delta_pct"
  *   },
- *
- *   policies?: { pctOnZero?: "null" | "0" | "inf" } // default "null"
+ *   policies?: { pctOnZero?: "null" | "0" | "inf" }
  * }
  */
 async function deltaAugment(rows, cfg = {}, ctx) {
   if (!Array.isArray(rows) || rows.length === 0) return rows;
 
-  // 1) resolve join keys
+  // 1) keys
   let keys = Array.isArray(cfg.keys) && cfg.keys.length ? cfg.keys.slice() : null;
   const gcfg = ctx?.state?.lastGroupCfg || null;
   if (!keys) {
     if (!gcfg) {
-      throw new Error(
-        'delta step needs "keys" or a prior "group" step (ctx.state.lastGroupCfg missing)'
-      );
+      throw new Error('delta step needs "keys" or a prior "group" step (ctx.state.lastGroupCfg missing)');
     }
     keys = Array.isArray(gcfg.by) ? gcfg.by.slice() : [];
     if (gcfg.timeBucket && gcfg.timeBucket.field) {
-      const tbKey = gcfg.timeBucket.as || "timeBucket"; // group-by emits bucket at this key
-      keys.push(tbKey); // note: this is a top-level key, not dotted
+      const tbKey = gcfg.timeBucket.as || "timeBucket"; // group emits the bucket at this key
+      keys.push(tbKey);
     }
   }
 
-  // 2) resolve baseline date range
-  let baseline = cfg.baseline;
-  if (!baseline) {
-    const r = ctx?.options?.report || {};
-    if (r.from_date && r.to_date) {
-      baseline = prevRangeSameLength(r.from_date, r.to_date);
-    }
-  }
+  // 2) baseline
+  let baseline =
+  (ctx?.state?.periods && ctx.state.periods.baseline) ||
+  resolveBaseline(ctx?.options?.report, cfg);
   if (!baseline || !baseline.from_date || !baseline.to_date) {
-    console.warn(
-      "[delta] Missing baseline; provide cfg.baseline.from_date/to_date or report.from_date/to_date. Skipping delta."
-    );
+    console.warn("[delta] Missing baseline; provide cfg.baseline or report.from_date/to_date. Skipping delta.");
     return rows;
   }
 
-  // 3) fetch previous raw, normalize with identical pre-steps, then group with same config
+  // 3) previous rows: fetch → pre-normalize → group (to match current schema)
   const prevRaw = await ctx.fetch(
     { from_date: baseline.from_date, to_date: baseline.to_date },
     "previous"
@@ -143,11 +167,12 @@ async function deltaAugment(rows, cfg = {}, ctx) {
     prevIdx.set(keyFromRow(pr, keys), pr);
   }
 
-  // 5) emit deltas (augment mode)
-  const nsPrev = (cfg.emit && cfg.emit.previous) || "metrics_prev";
-  const nsDAbs = (cfg.emit && cfg.emit.delta_abs) || "metrics_delta";
-  const nsDPct = (cfg.emit && cfg.emit.delta_pct) || "metrics_delta_pct";
+  // 5) compute deltas (augment)
+  const nsPrev = (cfg.emit && cfg.emit.previous)   || "metrics_prev";
+  const nsDAbs = (cfg.emit && cfg.emit.delta_abs)  || "metrics_delta";
+  const nsDPct = (cfg.emit && cfg.emit.delta_pct)  || "metrics_delta_pct";
   const pctPolicy = (cfg.policies && cfg.policies.pctOnZero) || "null";
+  const measures = Array.isArray(cfg.measures) ? cfg.measures : [];
 
   function pctDelta(cur, prev) {
     if (prev == null || prev === 0) {
@@ -156,7 +181,6 @@ async function deltaAugment(rows, cfg = {}, ctx) {
     return (cur - prev) / prev;
   }
 
-  const measures = Array.isArray(cfg.measures) ? cfg.measures : [];
   if (!measures.length) {
     console.warn("[delta] No measures provided; nothing to compute. Skipping.");
     return rows;
@@ -174,17 +198,16 @@ async function deltaAugment(rows, cfg = {}, ctx) {
         const currVal = Number(getAtPath(row, m.field));
         const prevVal = prev != null ? Number(getAtPath(prev, m.field)) : 0;
 
-        const leafName = leaf(m.field);
-        setAtPath(row, `${nsPrev}.${leafName}`, Number.isFinite(prevVal) ? prevVal : null);
+        const name = leaf(m.field);
+        setAtPath(row, `${nsPrev}.${name}`, Number.isFinite(prevVal) ? prevVal : null);
 
         const abs = (Number.isFinite(currVal) ? currVal : 0) - (Number.isFinite(prevVal) ? prevVal : 0);
-        setAtPath(row, `${nsDAbs}.${leafName}`, Number.isFinite(abs) ? abs : null);
+        setAtPath(row, `${nsDAbs}.${name}`, Number.isFinite(abs) ? abs : null);
 
         const pct = pctDelta(currVal, prevVal);
-        setAtPath(row, `${nsDPct}.${leafName}`, pct);
+        setAtPath(row, `${nsDPct}.${name}`, pct);
 
       } else if (m.kind === "ratio") {
-        // recompute ratios from bases so we don't depend on current rows having them precomputed
         const cNum = Number(getAtPath(row, m.num));
         const cDen = Number(getAtPath(row, m.den));
         const pNum = prev != null ? Number(getAtPath(prev, m.num)) : 0;
@@ -193,16 +216,17 @@ async function deltaAugment(rows, cfg = {}, ctx) {
         const currRatio = safeDivide(cNum, cDen, null);
         const prevRatio = safeDivide(pNum, pDen, null);
 
-        const leafName = leaf(m.field);
-        setAtPath(row, `${nsPrev}.${leafName}`, prevRatio);
+        const name = leaf(m.field);
+        setAtPath(row, `${nsPrev}.${name}`, prevRatio);
 
         const abs = currRatio == null || prevRatio == null ? null : currRatio - prevRatio;
-        setAtPath(row, `${nsDAbs}.${leafName}`, abs);
+        setAtPath(row, `${nsDAbs}.${name}`, abs);
 
         const pct =
-          prevRatio == null ? (pctPolicy === "0" ? 0 : pctPolicy === "inf" ? Infinity : null)
-                            : safeDivide(abs, prevRatio, pctPolicy === "0" ? 0 : pctPolicy === "inf" ? Infinity : null);
-        setAtPath(row, `${nsDPct}.${leafName}`, pct);
+          prevRatio == null
+            ? (pctPolicy === "0" ? 0 : pctPolicy === "inf" ? Infinity : null)
+            : safeDivide(abs, prevRatio, pctPolicy === "0" ? 0 : pctPolicy === "inf" ? Infinity : null);
+        setAtPath(row, `${nsDPct}.${name}`, pct);
       }
     }
 

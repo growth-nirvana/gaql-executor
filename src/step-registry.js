@@ -28,6 +28,10 @@ const STEPS = {
     (rows, cfg /*, ctx */) => formatMicrosRows(rows, cfg),
     { phase: "pre", changesCardinality: false }
   ),
+  filter: withTraits((rows, cfg) => filterStep(rows, cfg), {
+    phase: "pre",
+    changesCardinality: false
+  }),
   group: withTraits(
     (rows, cfg, ctx) => {
       // record the config so later steps (e.g., delta) can reuse it
@@ -50,6 +54,7 @@ const STEPS = {
   stats:   withTraits((rows, cfg) => statsStep(rows, cfg),   { phase: "post", changesCardinality: false }),
   percentileRank: withTraits((rows, cfg) => percentileRankStep(rows, cfg), { phase: "post", changesCardinality: false }),
   zScore: withTraits((rows, cfg) => zScoreStep(rows, cfg), { phase: "post", changesCardinality: false }),
+  having: withTraits((rows, cfg) => havingStep(rows, cfg), { phase: "post", changesCardinality: false }),
 };
 
 module.exports = { STEPS };

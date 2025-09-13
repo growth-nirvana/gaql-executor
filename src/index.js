@@ -3,8 +3,10 @@
  */
 
 const { GAQLExecutor } = require('./gaql-executor');
+const { FacebookExecutor } = require('./fb/fb-executor');
 
 // Main library entry point
 module.exports = {
-  GAQLExecutor
+  GAQLExecutor,
+  FacebookExecutor,
 };

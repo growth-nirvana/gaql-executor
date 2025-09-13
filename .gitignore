@@ -38,6 +38,15 @@ coverage/
 tmp/
 temp/
 
+# Output Directory
+output/
+templates/
+
+# Test and output files
+output.json
+test.js
+campaign.js
+
 # Package lock files (choose one)
 # package-lock.json
 # yarn.lock

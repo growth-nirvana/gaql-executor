@@ -1,48 +1,53 @@
 {
-  "name": "gaql-library",
+  "name": "@growth-nirvana/gaql-executor",
   "version": "1.0.0",
-  "description": "A library for working with Google Ads Query Language (GAQL)",
-  "main": "dist/index.js",
-  "scripts": {
-    "build": "esbuild src/index.js --bundle --platform=node --outfile=dist/index.js --format=cjs",
-    "build:watch": "esbuild src/index.js --bundle --platform=node --outfile=dist/index.js --format=cjs --watch",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "start": "node dist/index.js",
-    "dev": "npm run build:watch",
-    "lint": "eslint src/**/*.js",
-    "lint:fix": "eslint src/**/*.js --fix",
-    "clean": "rm -rf dist"
-  },
-  "keywords": [
-    "google-ads",
-    "gaql",
-    "query-language",
-    "google-ads-api",
-    "advertising"
-  ],
-  "author": "Your Name",
+  "description": "Composable GAQL executor + pipeline steps for the Google Ads API",
   "license": "MIT",
-  "devDependencies": {
-    "esbuild": "^0.19.8",
-    "eslint": "^8.53.0",
-    "jest": "^29.7.0"
+  "author": "Growth Nirvana",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/growth-nirvana/gaql-executor.git"
   },
-  "dependencies": {
-    "google-ads-api": "^21.0.1"
+  "bugs": {
+    "url": "https://github.com/growth-nirvana/gaql-executor/issues"
+  },
+  "homepage": "https://github.com/growth-nirvana/gaql-executor#readme",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
   },
   "files": [
     "dist/**/*",
     "README.md",
     "LICENSE"
   ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/yourusername/gaql-library.git"
+  "scripts": {
+    "build": "esbuild src/index.js --bundle --platform=node --format=cjs --outfile=dist/index.js --packages=external",
+    "build:watch": "esbuild src/index.js --bundle --platform=node --outfile=dist/index.js --format=cjs --watch",
+    "prepublishOnly": "npm run build",
+    "dev": "npm run build:watch",
+    "lint": "eslint \"src/**/*.js\"",
+    "lint:fix": "eslint \"src/**/*.js\" --fix",
+    "clean": "rm -rf dist"
   },
-  "bugs": {
-    "url": "https://github.com/yourusername/gaql-library/issues"
+  "keywords": [
+    "google-ads",
+    "gaql",
+    "google-ads-api",
+    "analytics",
+    "pipeline"
+  ],
+  "engines": {
+    "node": ">=18"
   },
-  "homepage": "https://github.com/yourusername/gaql-library#readme"
+  "dependencies": {
+    "facebook-nodejs-business-sdk": "^23.0.1",
+    "google-ads-api": "^21.0.1"
+  },
+  "devDependencies": {
+    "esbuild": "^0.19.8",
+    "eslint": "^8.53.0",
+    "jest": "^29.7.0"
+  }
 }

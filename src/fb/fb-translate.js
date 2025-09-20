@@ -115,6 +115,20 @@ function toFiltering(constraints = []) {
   return out;
 }
 
+function toActionBreakdowns(report = {}) {
+  // 1) Explicit override via report.parameters.action_breakdowns (array)
+  const ab = report?.parameters?.action_breakdowns;
+  if (Array.isArray(ab)) return [...ab];
+
+  // 2) Shorthand: if user asks for segments.action_type, request action_type
+  if (Array.isArray(report.segments) && report.segments.includes("segments.action_type")) {
+    return ["action_type"];
+  }
+
+  // 3) Default: none
+  return [];
+}
+
 // Build Insights params/fields from your report
 function buildInsightsQuery(report) {
   const level = pickInsightsLevel(report.entity);
@@ -123,6 +137,7 @@ function buildInsightsQuery(report) {
     level,
     fields, // SDK allows passing fields separately; we keep also in params for clarity
     breakdowns: toBreakdowns(report.segments),
+    action_breakdowns: toActionBreakdowns(report),   // ← NEW: default [] unless requested
     ...toTime(report),
   };
 
@@ -132,6 +147,11 @@ function buildInsightsQuery(report) {
       Array.isArray(report.constraints) ? report.constraints : [report.constraints]
     );
     if (filtering.length) params.filtering = filtering;
+  }
+
+  // Optional pass-through: attribution windows, etc.
+  if (report.parameters?.action_attribution_windows) {
+    params.action_attribution_windows = report.parameters.action_attribution_windows;
   }
 
   return { level, fields, params };
@@ -148,15 +168,29 @@ function shapeRow(row, report) {
     }
   }
 
-  // metrics
+  // metrics (scalars)
   for (const [path, field] of Object.entries(METRIC_FIELDS)) {
-    if (row[field] != null && report.metrics?.includes(path)) {
-      const n =
-        typeof row[field] === "string" && /^[\d.]+$/.test(row[field])
-          ? Number(row[field])
-          : row[field];
-      setAtPath(out, path, n);
+    if (!report.metrics?.includes(path)) continue;
+    const val = row[field];
+    if (val == null) continue;
+
+    // For action arrays, keep as-is but coerce numeric strings in "value"
+    if (Array.isArray(val)) {
+      const arr = val.map((it) => {
+        if (it && typeof it === "object" && "value" in it) {
+          const v = it.value;
+          const n = typeof v === "string" && /^[\d.]+$/.test(v) ? Number(v) : v;
+          return { ...it, value: n };
+        }
+        return it;
+      });
+      setAtPath(out, path, arr);
+      continue;
     }
+
+    // Otherwise coerce numeric strings
+    const n = typeof val === "string" && /^[\d.]+$/.test(val) ? Number(val) : val;
+    setAtPath(out, path, n);
   }
 
   // segments: date

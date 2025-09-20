@@ -91,14 +91,51 @@ class FacebookExecutor {
 
     const { level, fields, params } = buildInsightsQuery(report);
 
-    // SDK usage for Insights: account.getInsights(fields, params)
-    // (fields can be passed as array; params holds level/breakdowns/time_range/filtering/etc.)
-    // Docs: Insights overview & breakdowns. :contentReference[oaicite:2]{index=2}
-    const result = await account.getInsights(fields, params);
-    const raw = result.map(r => r._data || r); // normalize
+    const pageAll = !!report.parameters?.page_all;
+    const maxPages = Number.isFinite(report.parameters?.max_pages) ? report.parameters.max_pages : 10;
 
-    // shape rows into your cross-platform schema
-    const rows = raw.map(row => shapeRow(row, report));
+    const runCursor = async (p) => {
+      let cursor = await account.getInsights(fields, p);
+      const collected = [];
+      let pages = 1;
+
+      collected.push(...cursor.map((r) => r._data || r));
+
+      if (pageAll) {
+        while (cursor.hasNext() && pages < maxPages) {
+          cursor = await cursor.next();
+          collected.push(...cursor.map((r) => r._data || r));
+          pages++;
+        }
+      }
+      return collected;
+    };
+
+    const run = async (p) => {
+      const res = await account.getInsights(fields, p);
+      return res.map((r) => r._data || r);
+    };
+
+    let raw;
+    try {
+      raw = await runCursor(params);
+    } catch (e) {
+      const msg = String(e?.message || "");
+      const isInvalidCombo =
+        e?.status === 400 &&
+        msg.includes("action_type") &&
+        msg.includes("platform_position");
+
+      // Retry once without action_breakdowns if that specific combo fails
+      if (isInvalidCombo && Array.isArray(params.action_breakdowns) && params.action_breakdowns.length) {
+        const retryParams = { ...params, action_breakdowns: [] };
+        raw = await runCursor(retryParams);
+      } else {
+        throw e;
+      }
+    }
+
+    const rows = raw.map((row) => shapeRow(row, report));
     return { rows, raw, level, params };
   }
 

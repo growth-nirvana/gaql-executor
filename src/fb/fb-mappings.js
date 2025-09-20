@@ -36,6 +36,10 @@ const METRIC_FIELDS = {
   "metrics.reach": "reach",
   // Conversions on Meta are nuanced (actions, action_values arrays).
   // Start simple; extend later with action_attribution_windows, action_breakdowns, etc.
+
+  "metrics.actions": "actions",
+  "metrics.action_values": "action_values",
+  "metrics.cost_per_action_type": "cost_per_action_type",
 };
 
 // Segments → either a breakdown or a time control

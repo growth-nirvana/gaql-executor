@@ -7,6 +7,8 @@ const { attachPeriodsMetaStep } = require("./attach-periods-meta");
 const { shareOfStep } = require("./share-of");
 const { statsStep } = require("./stats");
 const { deriveDimensionStep } = require("./derive-dimension");
+const { actionsToColumnsRows } = require("./fb/actions-to-columns");
+
 
 function withTraits(fn, traits) {
   fn.traits = traits;
@@ -49,6 +51,9 @@ const STEPS = {
   attachPeriodsMeta: withTraits(
     (rows, cfg, ctx) => attachPeriodsMetaStep(rows, cfg, ctx),
     { phase: "post", changesCardinality: false }
+  ),
+  actionsToColumns: withTraits(
+    (rows, cfg) => actionsToColumnsRows(rows, cfg), { phase: "post", changesCardinality: false }
   ),
   shareOf: withTraits((rows, cfg) => shareOfStep(rows, cfg), { phase: "post", changesCardinality: false }),
   stats:   withTraits((rows, cfg) => statsStep(rows, cfg),   { phase: "post", changesCardinality: false }),

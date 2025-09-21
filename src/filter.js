@@ -100,6 +100,7 @@ function filterStep(rows, cfg = {}) {
   return rows.filter(r => {
     const results = rules.map(cond => {
       const v = getAtPath(r, cond.field);
+      
       return testCond(v, cond.op, cond.value, cond.flags);
     });
     return logic === "OR" ? results.some(Boolean) : results.every(Boolean);

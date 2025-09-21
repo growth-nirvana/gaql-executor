@@ -33,6 +33,7 @@ logs
 # Coverage
 coverage/
 .nyc_output
+*.lcov
 
 # Temporary files
 tmp/
@@ -40,7 +41,8 @@ temp/
 
 # Output Directory
 output/
-templates/
+
+/templates/
 
 # Test and output files
 output.json

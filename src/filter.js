@@ -1,10 +1,6 @@
 // filter.js
-function getAtPath(obj, path) {
-  const parts = String(path).split(".");
-  let cur = obj;
-  for (const p of parts) { if (cur == null) return undefined; cur = cur[p]; }
-  return cur;
-}
+const { getAtPath } = require('./utils');
+
 function escapeRegExp(s){ return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function likeToRegExp(pat) {
   // SQL LIKE: % → .*, _ → .

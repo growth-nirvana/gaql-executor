@@ -22,7 +22,9 @@ class GoogleAdsCampaignTemplate {
         'campaign.id',
         'campaign.name',
         'campaign.bidding_strategy_type',
-        "campaign.advertising_channel_type"
+        "campaign.advertising_channel_type",
+        "campaign_budget.amount_micros",
+        "campaign_budget.recommended_budget_amount_micros"
       ],
       metrics: [
         'metrics.cost_micros',
@@ -39,7 +41,21 @@ class GoogleAdsCampaignTemplate {
     } 
   }
 
-  static forPerformanceAnalysis(credentials, fromDate, toDate) {
+  static calculateGroupByAttributes(config) {
+    // Get the allowed attributes from the base report
+    const baseReport = this.getBaseCampaignReport();
+    const allowedAttributes = baseReport.attributes;
+    
+    if (config.attributes && config.attributes.length > 0) {
+      // User provided specific attributes - filter to only valid ones
+      return config.attributes.filter(attr => allowedAttributes.includes(attr));
+    } else {
+      // User provided no attributes - use all base report attributes
+      return allowedAttributes;
+    }
+  }
+
+  static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
     const report = {
       ...this.getBaseCampaignReport(),
       from_date: fromDate,
@@ -56,12 +72,7 @@ class GoogleAdsCampaignTemplate {
         { 
           use: "group", 
           by: [
-            'customer.id',
-            'customer.descriptive_name',
-            'campaign.id',
-            'campaign.name',
-            'campaign.bidding_strategy_type',
-            "campaign.advertising_channel_type"
+            ...this.calculateGroupByAttributes(config),
           ],
           aggregates: {
             "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
@@ -77,6 +88,7 @@ class GoogleAdsCampaignTemplate {
             "cpa":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.conversions", as: "metrics.cpa" },
           },
           rollup: true,
+          nulls: "include",
           orderBy: [{ field: "campaign.name", dir: "ASC" }],
         },
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },

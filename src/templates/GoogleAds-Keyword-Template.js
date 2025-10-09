@@ -1,19 +1,21 @@
 const { BaseTemplate } = require('./BaseTemplate');
 
-class GoogleAdsCampaignTemplate extends BaseTemplate {
-  
+class GoogleAdsKeywordTemplate extends BaseTemplate {
+
   static getBaseReport() {
     return {
-      entity: 'campaign',
+      entity: 'keyword_view',
       attributes: [
+        'keyword_view.resource_name',
         'customer.id',
         'customer.descriptive_name',
         'campaign.id',
         'campaign.name',
-        'campaign.bidding_strategy_type',
-        "campaign.advertising_channel_type",
-        "campaign_budget.amount_micros",
-        "campaign_budget.recommended_budget_amount_micros",
+        'ad_group.id',
+        'ad_group.name',
+        'ad_group_criterion.criterion_id',
+        'ad_group_criterion.keyword.match_type',
+        'ad_group_criterion.keyword.text',
       ],
       metrics: [
         'metrics.cost_micros',
@@ -22,14 +24,18 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
         'metrics.conversions',
         'metrics.conversions_value'
       ],
-      // segments: [],
       constraints: [
         { key: "metrics.impressions", op: ">", val: 0 }
       ],
-      limit: 1000,
-    } 
+      order: [
+        { field: "metrics.cost_micros", sort_order: "DESC" }
+      ],
+      rollup: true,
+      nulls: "include",
+      orderBy: [{ field: "metrics.cost", dir: "DESC" }],
+      limit: 5000,
+    }
   }
-
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
     const report = {
@@ -104,15 +110,6 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           },
           policies: { pctOnZero: "null" }
         },
-        {
-          use: "topN",
-          by: ["campaign.id", "campaign.name"],
-          metric: "metrics.cost_share",
-          n: 5,
-          include: ["metrics.cost", "metrics.clicks", "metrics.impressions"],
-          excludeRollup: true,
-          as: "top_campaigns"
-        },
       ],
       output: {
         mode: "envelope",
@@ -122,4 +119,4 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
   }
 }
 
-module.exports = { GoogleAdsCampaignTemplate };
+module.exports = { GoogleAdsKeywordTemplate };

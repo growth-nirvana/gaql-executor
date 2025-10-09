@@ -158,6 +158,13 @@ class GAQLExecutor {
         };
       }
     }
+    
+    // Include envelope data from pipeline steps (like topN)
+    if (ctx?.state?.envelopeData) {
+      // Flatten envelopeData so each 'as' key becomes a direct property
+      Object.assign(meta, ctx.state.envelopeData);
+    }
+    
     return meta;
   }
 
@@ -307,7 +314,7 @@ class GAQLExecutor {
       return result;
   
     } catch (error) {
-      console.error('Full error object:', error);
+      console.error('Full error object:', JSON.stringify(error, null, 2));
       console.error('Error message:', error.message);
       console.error('Error stack:', error.stack);
       throw new Error(`Google Ads API Error: ${error.message || error.toString()}`);

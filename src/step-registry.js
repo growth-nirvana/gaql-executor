@@ -8,6 +8,7 @@ const { shareOfStep } = require("./share-of");
 const { statsStep } = require("./stats");
 const { deriveDimensionStep } = require("./derive-dimension");
 const { actionsToColumnsRows } = require("./fb/actions-to-columns");
+const { topNStep } = require("./top-n");
 
 
 function withTraits(fn, traits) {
@@ -60,6 +61,7 @@ const STEPS = {
   percentileRank: withTraits((rows, cfg) => percentileRankStep(rows, cfg), { phase: "post", changesCardinality: false }),
   zScore: withTraits((rows, cfg) => zScoreStep(rows, cfg), { phase: "post", changesCardinality: false }),
   having: withTraits((rows, cfg) => havingStep(rows, cfg), { phase: "post", changesCardinality: false }),
+  topN: withTraits((rows, cfg, ctx) => topNStep(rows, cfg, ctx), { phase: "post", changesCardinality: false }),
 };
 
 module.exports = { STEPS };

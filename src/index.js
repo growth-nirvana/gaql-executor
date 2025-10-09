@@ -6,6 +6,8 @@ const { GAQLExecutor } = require('./gaql-executor');
 const { FacebookExecutor } = require('./fb/fb-executor');
 const { FacebookCampaignTemplate } = require('./templates/Facebook-Campaign-Template');
 const { GoogleAdsCampaignTemplate } = require('./templates/GoogleAds-Campaign-Template');
+const { GoogleAdsKeywordTemplate } = require('./templates/GoogleAds-Keyword-Template');
+const { GoogleAdsAdTemplate } = require('./templates/GoogleAds-Ad-Template');
 
 // Main library entry point
 module.exports = {
@@ -13,4 +15,6 @@ module.exports = {
   FacebookExecutor,
   FacebookCampaignTemplate,
   GoogleAdsCampaignTemplate,
+  GoogleAdsKeywordTemplate,
+  GoogleAdsAdTemplate,
 };

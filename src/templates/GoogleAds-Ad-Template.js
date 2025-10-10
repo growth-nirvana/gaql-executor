@@ -26,11 +26,7 @@ class GoogleAdsAdTemplate extends BaseTemplate {
         'metrics.impressions',
         'metrics.conversions',
         'metrics.conversions_value',
-      ],
-      constraints: [
-        // { key: 'ad_group_ad.ad.type', op: '=', val: 'RESPONSIVE_SEARCH_AD' }
-        { key: 'metrics.impressions', op: '>', val: 0 }
-      ],
+      ]
     }
   }
 }

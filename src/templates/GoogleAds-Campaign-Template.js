@@ -111,7 +111,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           n: 5,
           include: ["metrics.cost", "metrics.clicks", "metrics.impressions"],
           excludeRollup: true,
-          as: "top_campaigns"
+          as: "top_campaigns_by_cost_share"
         },
       ],
       output: {

@@ -17,24 +17,25 @@ const { getAtPath, setAtPath } = require('./utils');
         n: 2,
         include: ["metrics.cost", "metrics.clicks", "metrics.impressions"],
         excludeRollup: true,
+        direction: "desc",  // "desc" for top N (default), "asc" for bottom N
         as: "top_campaigns"
       };
  */
 
 
 function topNStep(rows, config, ctx) {
-  const { by, metric, n = 10, include = [], excludeRollup = true, as } = config;
+  const { by, metric, n = 10, include = [], excludeRollup = true, direction = "desc", as } = config;
   // console.log(JSON.stringify(config, null, 2));
   
   // Filter out rollup rows if needed
   const filteredRows = excludeRollup ? 
     rows.filter(row => !row.__rollup) : rows;
   
-  // Sort by metric descending
+  // Sort by metric - descending for top N, ascending for bottom N
   const sorted = filteredRows.sort((a, b) => {
     const aVal = getAtPath(a, metric) || 0;
     const bVal = getAtPath(b, metric) || 0;
-    return bVal - aVal;
+    return direction === "asc" ? aVal - bVal : bVal - aVal;
   });
   
   // Take top N and select only needed fields

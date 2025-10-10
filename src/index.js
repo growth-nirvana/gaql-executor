@@ -8,6 +8,8 @@ const { FacebookCampaignTemplate } = require('./templates/Facebook-Campaign-Temp
 const { GoogleAdsCampaignTemplate } = require('./templates/GoogleAds-Campaign-Template');
 const { GoogleAdsKeywordTemplate } = require('./templates/GoogleAds-Keyword-Template');
 const { GoogleAdsAdTemplate } = require('./templates/GoogleAds-Ad-Template');
+const { GoogleAdsCustomerTemplate } = require('./templates/GoogleAds-Customer-Template');
+const { GoogleAdsConversionActionTemplate } = require('./templates/GoogleAds-ConversionAction-Template');
 
 // Main library entry point
 module.exports = {
@@ -17,4 +19,6 @@ module.exports = {
   GoogleAdsCampaignTemplate,
   GoogleAdsKeywordTemplate,
   GoogleAdsAdTemplate,
+  GoogleAdsCustomerTemplate,
+  GoogleAdsConversionActionTemplate,
 };

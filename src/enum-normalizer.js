@@ -27,6 +27,11 @@ const ENUM_MAPS = {
   "customer.status": reverse(enums.CustomerStatus),
   "conversion_action.category": reverse(enums.ConversionActionCategory),
   "conversion_action.type": reverse(enums.ConversionActionType),
+  "conversion_action.counting_type": reverse(enums.ConversionActionCountingType),
+  "conversion_action.origin": reverse(enums.ConversionOrigin),
+  "conversion_action.status": reverse(enums.ConversionActionStatus),
+  "conversion_action.attribution_model_settings.attribution_model": reverse(enums.AttributionModel),
+  "conversion_action.attribution_model_settings.data_driven_model_status": reverse(enums.DataDrivenModelStatus),
   // Add more if you query them:
   "change_event.change_resource_type": reverse(enums.ChangeEventResourceType),
   "change_event.resource_change_operation": reverse(enums.ResourceChangeOperation),

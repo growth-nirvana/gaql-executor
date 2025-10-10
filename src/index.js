@@ -10,6 +10,7 @@ const { GoogleAdsKeywordTemplate } = require('./templates/GoogleAds-Keyword-Temp
 const { GoogleAdsAdTemplate } = require('./templates/GoogleAds-Ad-Template');
 const { GoogleAdsCustomerTemplate } = require('./templates/GoogleAds-Customer-Template');
 const { GoogleAdsConversionActionTemplate } = require('./templates/GoogleAds-ConversionAction-Template');
+const { toCsv, resultsToCsv, writeCsv, flattenObject } = require('./utils/csv-exporter');
 
 // Main library entry point
 module.exports = {
@@ -21,4 +22,9 @@ module.exports = {
   GoogleAdsAdTemplate,
   GoogleAdsCustomerTemplate,
   GoogleAdsConversionActionTemplate,
+  // CSV utilities
+  toCsv,
+  resultsToCsv,
+  writeCsv,
+  flattenObject,
 };

@@ -6,6 +6,14 @@ const { GoogleAdsApi } = require('google-ads-api');
 
 class GAQLExecutor {
   constructor(options = {}) {
+    // Normalize customerIds to always be an array
+    let customerIds = [];
+    if (options.credentials?.customerIds && Array.isArray(options.credentials.customerIds)) {
+      customerIds = options.credentials.customerIds;
+    } else if (options.credentials?.customerId) {
+      customerIds = [options.credentials.customerId];
+    }
+
     this.options = {
       // Support both GAQL queries and report options
       query: {
@@ -29,7 +37,7 @@ class GAQLExecutor {
         refreshToken: options.credentials?.refreshToken,
         clientId: options.credentials?.clientId,
         clientSecret: options.credentials?.clientSecret,
-        customerId: options.credentials?.customerId,
+        customerIds: customerIds,
         loginCustomerId: options.credentials?.loginCustomerId
       },
       pipeline: Array.isArray(options.pipeline) ? options.pipeline : [],
@@ -203,13 +211,14 @@ class GAQLExecutor {
 
   /**
    * Create a customer instance with serialization hook
+   * @param {string} customerId - The customer ID to create instance for
    * @returns {Object} - The customer instance
    */
-  createCustomer() {
-    const { credentials: { customerId, loginCustomerId, refreshToken } } = this.options;
+  createCustomer(customerId) {
+    const { credentials: { loginCustomerId, refreshToken } } = this.options;
     
     if (!customerId) {
-      throw new Error('Customer ID is required in options.credentials.customerId');
+      throw new Error('Customer ID is required');
     }
 
     // IMPORTANT: return RAW rows; pipeline runs in execute()
@@ -283,42 +292,95 @@ class GAQLExecutor {
   async execute() {
     // Initialize client lazily
     this.initializeClient();
-  
-    // Create customer instance with serialization hook (returns RAW rows)
-    const customer = this.createCustomer();
-  
-    let rawRows;
-  
-    try {
-      // 1) Fetch current-period rows
-      if (this.options.report.entity) {
-        rawRows = await customer.report(this.options.report);
-      } else {
-        const gaqlQuery = this.options.query?.gaql;
-        if (!gaqlQuery) throw new Error("Either report options or GAQL query is required");
-        rawRows = await customer.query(gaqlQuery);
-      }
-  
-      // 2) Build ctx (gives steps access to fetch(), runPre(), periods, etc.)
-      const ctx = this.buildContext(customer);
-  
-      // 3) Run the pipeline (steps operate on plain arrays, as before)
-      const result = await this.runPipeline(rawRows, ctx);
-  
-      // 4) Wrap output if requested; otherwise return rows (backward compatible)
-      const { output } = this.options || {};
-      if (output && output.mode === "envelope") {
-        const meta = this.collectMeta(ctx, output);
-        return { meta, results: result };
-      }
-      return result;
-  
-    } catch (error) {
-      console.error('Full error object:', JSON.stringify(error, null, 2));
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-      throw new Error(`Google Ads API Error: ${error.message || error.toString()}`);
+
+    const { customerIds } = this.options.credentials;
+    
+    if (!customerIds || customerIds.length === 0) {
+      throw new Error('At least one customer ID is required');
     }
+
+    const allResults = [];
+    const allMeta = [];
+
+    // Loop through each customer ID
+    for (const customerId of customerIds) {
+      try {
+        // Create customer instance with serialization hook (returns RAW rows)
+        const customer = this.createCustomer(customerId);
+        
+        let rawRows;
+        
+        // 1) Fetch current-period rows
+        if (this.options.report.entity) {
+          rawRows = await customer.report(this.options.report);
+        } else {
+          const gaqlQuery = this.options.query?.gaql;
+          if (!gaqlQuery) throw new Error("Either report options or GAQL query is required");
+          rawRows = await customer.query(gaqlQuery);
+        }
+        
+        // 2) Build ctx (gives steps access to fetch(), runPre(), periods, etc.)
+        const ctx = this.buildContext(customer);
+        
+        // 3) Run the pipeline (steps operate on plain arrays, as before)
+        const result = await this.runPipeline(rawRows, ctx);
+        
+        // 4) Collect results
+        const { output } = this.options || {};
+        if (output && output.mode === "envelope") {
+          const meta = this.collectMeta(ctx, output);
+          allMeta.push(meta);
+          allResults.push(...result);
+        } else {
+          allResults.push(...result);
+        }
+        
+      } catch (error) {
+        console.error(`Error for customer ID ${customerId}:`);
+        console.error('Full error:', JSON.stringify(error, null, 2));
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+        throw error;
+      }
+    }
+
+    // 5) Return combined results
+    const { output } = this.options || {};
+    if (output && output.mode === "envelope") {
+      // Merge meta objects - use first one's periods, combine envelope data
+      const combinedMeta = this.combineMeta(allMeta);
+      return { meta: combinedMeta, results: allResults };
+    }
+    return allResults;
+  }
+
+  /**
+   * Combine meta objects from multiple accounts
+   */
+  combineMeta(allMeta) {
+    if (allMeta.length === 0) return {};
+    if (allMeta.length === 1) return allMeta[0];
+
+    const combined = {
+      periods: allMeta[0].periods, // Use first account's periods
+    };
+
+    // Combine envelope data (like top_campaigns_by_cost_share, etc.)
+    for (const meta of allMeta) {
+      for (const [key, value] of Object.entries(meta)) {
+        if (key === 'periods') continue;
+        
+        if (!combined[key]) {
+          combined[key] = Array.isArray(value) ? [] : value;
+        }
+        
+        if (Array.isArray(combined[key]) && Array.isArray(value)) {
+          combined[key].push(...value);
+        }
+      }
+    }
+
+    return combined;
   }
 }
 

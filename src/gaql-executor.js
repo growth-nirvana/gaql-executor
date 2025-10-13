@@ -114,16 +114,6 @@ class GAQLExecutor {
       },
       // Fetch from ALL customers and combine
       fetch: async (overrides = {}, tag = "default") => {
-        const key = JSON.stringify({
-          tag,
-          report: this.mergeReportOptions(baseReport, overrides),
-          gaql: baseQuery ? (overrides.gaql || baseQuery) : null
-        });
-        
-        if (cache.has(key)) {
-          return cache.get(key);
-        }
-
         // Fetch from ALL customers
         const allRows = [];
         for (const customer of customerInstances) {
@@ -139,7 +129,6 @@ class GAQLExecutor {
           allRows.push(...rows);
         }
        
-        cache.set(key, allRows);
         return allRows;
       },
 
@@ -315,8 +304,6 @@ class GAQLExecutor {
 
     for (const customerId of customerIds) {
       try {
-        console.log(`Fetching data for customer ID: ${customerId}`);
-        
         // Create customer instance
         const customer = this.createCustomer(customerId);
         customerInstances.push(customer);

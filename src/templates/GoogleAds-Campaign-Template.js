@@ -79,6 +79,10 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
         },
         {
           use: "delta",
+          // Optional: if omitted, it will compute previous range from report.from_date/to_date
+          // baseline: { from_date: "2025-08-01", to_date: "2025-08-31" },
+          // Optional: explicit keys; otherwise derived from prior group (by + timeBucket)
+          // keys: ["campaign.bidding_strategy_type"],
           baseline: { mode: "previous_period" },
           partial:  { policy: "match_upto_day" }, 
           measures: [

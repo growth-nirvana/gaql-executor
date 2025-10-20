@@ -19,13 +19,16 @@ const executor = new FacebookExecutor({
       'metrics.impressions',
       'metrics.ctr',
       'metrics.cpc',
-      'metrics.cpm'
+      'metrics.cpm',
+      "metrics.actions",
+      "metrics.action_values",
     ],
     segments: [
       // 'segments.date',              // uncomment for daily rows
       // 'segments.country',
       // 'segments.device_platform'
-      'segments.platform_position'
+      // 'segments.action_type'
+      // 'segments.platform_position'
     ],
     constraints: [
       // { key: 'campaign.name', op: 'CONTAINS', val: 'LSE-DA' },
@@ -40,23 +43,34 @@ const executor = new FacebookExecutor({
     accountId:   META_AD_ACCOUNT_ID,  // 1234567890 (we’ll prefix act_)
   },
   pipeline: [
-    // You can reuse your existing steps (group, delta, stats, addDimensions, etc.)
-    { use: 'group', 
-      by: [
-        'campaign.id',
-        'campaign.name',
-        'account.id',
-        'account.name',
-        'campaign.objective',
-        'segments.platform_position',
+    { use: 
+      'actionsToColumns',
+      sources: [
+        { from: 'metrics.actions',       to: 'metrics.actions_by_type',       totalAs: '_total',       keepRaw: true },
+        { from: 'metrics.action_values', to: 'metrics.action_values_by_type', totalAs: '_total_value', keepRaw: true },
       ],
-      aggregates: {
-      'metrics.spend':       { fn: 'SUM', as: 'metrics.spend' },
-      'metrics.clicks':      { fn: 'SUM', as: 'metrics.clicks' },
-      'metrics.impressions': { fn: 'SUM', as: 'metrics.impressions' },
-      'ctr': { fn: 'RATIO', num: 'metrics.clicks', den: 'metrics.impressions', as: 'metrics.ctr' },
-      'cpc': { fn: 'RATIO', num: 'metrics.spend', den: 'metrics.clicks',      as: 'metrics.cpc' },
-    }},
+    },
+    // You can reuse your existing steps (group, delta, stats, addDimensions, etc.)
+    // { use: 'group', 
+    //   by: [
+    //     'campaign.id',
+    //     'campaign.name',
+    //     'account.id',
+    //     'account.name',
+    //     'campaign.objective',
+    //     // 'segments.action_type',
+    //   ],
+    //   aggregates: {
+    //     'metrics.spend':       { fn: 'SUM', as: 'metrics.spend' },
+    //     'metrics.clicks':      { fn: 'SUM', as: 'metrics.clicks' },
+    //     'metrics.impressions': { fn: 'SUM', as: 'metrics.impressions' },
+    //     "metrics.actions_by_type._total":         { fn: "SUM", as: "metrics.actions_total" },
+    //     "metrics.actions_by_type.purchase":       { fn: "SUM", as: "metrics.actions_purchase" },
+    //     "metrics.action_values_by_type.purchase": { fn: "SUM", as: "metrics.purchase_value" },
+    //     'ctr': { fn: 'RATIO', num: 'metrics.clicks', den: 'metrics.impressions', as: 'metrics.ctr' },
+    //     'cpc': { fn: 'RATIO', num: 'metrics.spend', den: 'metrics.clicks',      as: 'metrics.cpc' },
+    //   },
+    // },
   ],
   output: { mode: 'envelope', include: [] }
 });

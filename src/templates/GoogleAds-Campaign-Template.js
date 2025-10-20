@@ -105,6 +105,21 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           policies: { pctOnZero: "null" }
         },
         {
+          use: "conversionActionsEnricher",
+          report: {
+            entity: 'campaign',
+            attributes: ['customer.id', 'customer.descriptive_name', 'campaign.id', 'campaign.name'],
+            segments: ['segments.conversion_action_name'],
+            metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+            from_date: fromDate,
+            to_date: toDate,
+            constraints: []  // Empty constraints for segment compatibility
+          },
+          joinKeys: ['customer.id', 'campaign.id'],
+          outputPath: 'conversion_actions',
+          aggregate: true
+        },
+        {
           use: "topN",
           by: ["campaign.id", "campaign.name"],
           metric: "metrics.cost_share",

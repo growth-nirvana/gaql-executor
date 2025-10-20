@@ -8,6 +8,7 @@ const { shareOfStep } = require("./share-of");
 const { statsStep } = require("./stats");
 const { deriveDimensionStep } = require("./derive-dimension");
 const { actionsToColumnsRows } = require("./fb/actions-to-columns");
+const { enrichWithConversionActions } = require("./google-ads/conversion-actions-enricher");
 const { topNStep } = require("./top-n");
 
 
@@ -55,6 +56,10 @@ const STEPS = {
   ),
   actionsToColumns: withTraits(
     (rows, cfg) => actionsToColumnsRows(rows, cfg), { phase: "post", changesCardinality: false }
+  ),
+  conversionActionsEnricher: withTraits(
+    async (rows, cfg, ctx) => enrichWithConversionActions(rows, cfg, ctx), 
+    { phase: "post", changesCardinality: false }
   ),
   shareOf: withTraits((rows, cfg) => shareOfStep(rows, cfg), { phase: "post", changesCardinality: false }),
   stats:   withTraits((rows, cfg) => statsStep(rows, cfg),   { phase: "post", changesCardinality: false }),

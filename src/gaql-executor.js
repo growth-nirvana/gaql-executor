@@ -119,7 +119,8 @@ class GAQLExecutor {
         for (const customer of customerInstances) {
           let rows;
           if(baseReport?.entity) {
-            rows = await customer.report(this.mergeReportOptions(baseReport, overrides));
+            const finalReport = this.overrideReportOptions(baseReport, overrides);
+            rows = await customer.report(finalReport);
           } else if (baseQuery) {
             const gaql = overrides.gaql || baseQuery;
             rows = await customer.query(gaql);
@@ -238,11 +239,23 @@ class GAQLExecutor {
     const merged = this.clone(base) || {};
     const allow = [
       "date_constant", "from_date", "to_date", "constraints",
-      "limit", "order", "parameters", "search_settings"
+      "limit", "order", "parameters", "search_settings", "segments",
+      "attributes", "metrics"
     ]
     for (const k of allow) if (k in overrides && overrides[k] !== undefined) merged[k] = overrides[k];
 
     return merged;
+  }
+
+  overrideReportOptions(base, overrides = {}) {
+    const result = this.clone(base) || {};
+    // Completely replace specified fields instead of merging
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value !== undefined) {
+        result[key] = value;
+      }
+    }
+    return result;
   }
 
   /**

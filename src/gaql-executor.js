@@ -6,6 +6,14 @@ const { GoogleAdsApi } = require('google-ads-api');
 
 class GAQLExecutor {
   constructor(options = {}) {
+    // Normalize customerIds to always be an array
+    let customerIds = [];
+    if (options.credentials?.customerIds && Array.isArray(options.credentials.customerIds)) {
+      customerIds = options.credentials.customerIds;
+    } else if (options.credentials?.customerId) {
+      customerIds = [options.credentials.customerId];
+    }
+
     this.options = {
       // Support both GAQL queries and report options
       query: {
@@ -29,7 +37,7 @@ class GAQLExecutor {
         refreshToken: options.credentials?.refreshToken,
         clientId: options.credentials?.clientId,
         clientSecret: options.credentials?.clientSecret,
-        customerId: options.credentials?.customerId,
+        customerIds: customerIds,
         loginCustomerId: options.credentials?.loginCustomerId
       },
       pipeline: Array.isArray(options.pipeline) ? options.pipeline : [],
@@ -72,7 +80,11 @@ class GAQLExecutor {
     return !!(fn && fn.traits && fn.traits.changesCardinality);
   }
 
-  buildContext(customer) {
+  /**
+   * Build context for execution
+   * Provides fetch() that queries ALL customer accounts and combines results
+   */
+  buildContextMultiAccount(customerInstances) {
     const pipeline = Array.isArray(this.options.pipeline) ? this.options.pipeline : [];
     const baseReport = this.clone(this.options.report);
     const baseQuery = this.clone(this.options.query?.gaql) || null;
@@ -100,29 +112,25 @@ class GAQLExecutor {
         const pre = state.preStepsExecuted || [];
         return runWithSteps(rows, pre);
       },
+      // Fetch from ALL customers and combine
       fetch: async (overrides = {}, tag = "default") => {
-        const key = JSON.stringify({
-          tag,
-          report: this.mergeReportOptions(baseReport, overrides),
-          gaql: baseQuery ? (overrides.gaql || baseQuery) : null
-        });
-        
-        if (cache.has(key)) {
-          return cache.get(key);
-        }
-
-        let rows;
-        if(baseReport?.entity) {
-          rows = await customer.report(this.mergeReportOptions(baseReport, overrides));
-        } else if (baseQuery) {
-          const gaql = overrides.gaql || baseQuery;
-          rows = await customer.query(gaql);
-        } else {
-          throw new Error("No report entity or GAQL query configured.");
+        // Fetch from ALL customers
+        const allRows = [];
+        for (const customer of customerInstances) {
+          let rows;
+          if(baseReport?.entity) {
+            const finalReport = this.overrideReportOptions(baseReport, overrides);
+            rows = await customer.report(finalReport);
+          } else if (baseQuery) {
+            const gaql = overrides.gaql || baseQuery;
+            rows = await customer.query(gaql);
+          } else {
+            throw new Error("No report entity or GAQL query configured.");
+          }
+          allRows.push(...rows);
         }
        
-        cache.set(key, rows);
-        return rows;
+        return allRows;
       },
 
       // expose for advanced usage (rare)
@@ -158,6 +166,13 @@ class GAQLExecutor {
         };
       }
     }
+    
+    // Include envelope data from pipeline steps (like topN)
+    if (ctx?.state?.envelopeData) {
+      // Flatten envelopeData so each 'as' key becomes a direct property
+      Object.assign(meta, ctx.state.envelopeData);
+    }
+    
     return meta;
   }
 
@@ -196,13 +211,14 @@ class GAQLExecutor {
 
   /**
    * Create a customer instance with serialization hook
+   * @param {string} customerId - The customer ID to create instance for
    * @returns {Object} - The customer instance
    */
-  createCustomer() {
-    const { credentials: { customerId, loginCustomerId, refreshToken } } = this.options;
+  createCustomer(customerId) {
+    const { credentials: { loginCustomerId, refreshToken } } = this.options;
     
     if (!customerId) {
-      throw new Error('Customer ID is required in options.credentials.customerId');
+      throw new Error('Customer ID is required');
     }
 
     // IMPORTANT: return RAW rows; pipeline runs in execute()
@@ -223,11 +239,23 @@ class GAQLExecutor {
     const merged = this.clone(base) || {};
     const allow = [
       "date_constant", "from_date", "to_date", "constraints",
-      "limit", "order", "parameters", "search_settings"
+      "limit", "order", "parameters", "search_settings", "segments",
+      "attributes", "metrics"
     ]
     for (const k of allow) if (k in overrides && overrides[k] !== undefined) merged[k] = overrides[k];
 
     return merged;
+  }
+
+  overrideReportOptions(base, overrides = {}) {
+    const result = this.clone(base) || {};
+    // Completely replace specified fields instead of merging
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value !== undefined) {
+        result[key] = value;
+      }
+    }
+    return result;
   }
 
   /**
@@ -276,43 +304,60 @@ class GAQLExecutor {
   async execute() {
     // Initialize client lazily
     this.initializeClient();
-  
-    // Create customer instance with serialization hook (returns RAW rows)
-    const customer = this.createCustomer();
-  
-    let rawRows;
-  
-    try {
-      // 1) Fetch current-period rows
-      if (this.options.report.entity) {
-        rawRows = await customer.report(this.options.report);
-      } else {
-        const gaqlQuery = this.options.query?.gaql;
-        if (!gaqlQuery) throw new Error("Either report options or GAQL query is required");
-        rawRows = await customer.query(gaqlQuery);
-      }
-  
-      // 2) Build ctx (gives steps access to fetch(), runPre(), periods, etc.)
-      const ctx = this.buildContext(customer);
-  
-      // 3) Run the pipeline (steps operate on plain arrays, as before)
-      const result = await this.runPipeline(rawRows, ctx);
-  
-      // 4) Wrap output if requested; otherwise return rows (backward compatible)
-      const { output } = this.options || {};
-      if (output && output.mode === "envelope") {
-        const meta = this.collectMeta(ctx, output);
-        return { meta, results: result };
-      }
-      return result;
-  
-    } catch (error) {
-      console.error('Full error object:', error);
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-      throw new Error(`Google Ads API Error: ${error.message || error.toString()}`);
+
+    const { customerIds } = this.options.credentials;
+    
+    if (!customerIds || customerIds.length === 0) {
+      throw new Error('At least one customer ID is required');
     }
+
+    // Step 1: Fetch raw data from all customers (API calls only)
+    const allRawRows = [];
+    const customerInstances = [];
+
+    for (const customerId of customerIds) {
+      try {
+        // Create customer instance
+        const customer = this.createCustomer(customerId);
+        customerInstances.push(customer);
+        
+        // Fetch raw data ONLY
+        let rawRows;
+        if (this.options.report.entity) {
+          rawRows = await customer.report(this.options.report);
+        } else {
+          const gaqlQuery = this.options.query?.gaql;
+          if (!gaqlQuery) throw new Error("Either report options or GAQL query is required");
+          rawRows = await customer.query(gaqlQuery);
+        }
+        
+        // Collect raw rows
+        allRawRows.push(...rawRows);
+        
+      } catch (error) {
+        console.error(`Error for customer ID ${customerId}:`);
+        console.error('Full error:', JSON.stringify(error, null, 2));
+        console.error('Error message:', error.message);
+        console.error('Error stack:', error.stack);
+        throw error;
+      }
+    }
+
+    // Step 2: Build context with access to ALL customers
+    const ctx = this.buildContextMultiAccount(customerInstances);
+
+    // Step 3: Run pipeline ONCE on combined data
+    const result = await this.runPipeline(allRawRows, ctx);
+
+    // Step 4: Return results
+    const { output } = this.options || {};
+    if (output && output.mode === "envelope") {
+      const meta = this.collectMeta(ctx, output);
+      return { meta, results: result };
+    }
+    return result;
   }
+
 }
 
 module.exports = { GAQLExecutor };

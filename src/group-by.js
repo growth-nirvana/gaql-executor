@@ -1,27 +1,6 @@
 // group-by.js
 
-// ---------- path helpers ----------
-function getAtPath(obj, path) {
-  const parts = Array.isArray(path) ? path : String(path).split(".");
-  let cur = obj;
-  for (const p of parts) {
-    if (cur == null) return undefined;
-    cur = cur[p];
-  }
-  return cur;
-}
-
-function setAtPath(obj, path, value) {
-  const parts = Array.isArray(path) ? path : String(path).split(".");
-  let cur = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const p = parts[i];
-    if (!cur[p] || typeof cur[p] !== "object") cur[p] = {};
-    cur = cur[p];
-  }
-  cur[parts[parts.length - 1]] = value;
-  return obj;
-}
+const { getAtPath, setAtPath } = require('./utils');
 
 // ---------- date bucketing ----------
 function parseDateLike(s) {
@@ -203,6 +182,7 @@ function groupRows(rows, cfg = {}) {
     limit,
     rollup = false,
     nulls = "exclude",
+    expressions = {},
   } = cfg;
 
   if (!Array.isArray(rows) || rows.length === 0) return [];
@@ -316,7 +296,18 @@ function groupRows(rows, cfg = {}) {
     
       if (String(d.as).includes(".")) setAtPath(row, d.as, value);
       else row[d.as] = value;
-    }   
+    }
+    
+    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    // NEW: post-compute expressions mixing current, previous, delta
+    if (expressions && typeof expressions === "object") {
+      for (const [path, fn] of Object.entries(expressions)) {
+        const val = typeof fn === "function" ? fn(row) : fn;
+        setAtPath(row, path, val);
+      }
+    }
+    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
     out.push(row);
   }
 

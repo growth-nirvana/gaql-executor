@@ -18,14 +18,25 @@ const ENUM_MAPS = {
   "campaign_budget.period": reverse(enums.BudgetPeriod),
   "ad_group.status": reverse(enums.AdGroupStatus),
   "ad_group_criterion.status": reverse(enums.AdGroupCriterionStatus),
+  "ad_group_criterion.keyword.match_type": reverse(enums.KeywordMatchType),
   "ad_group_ad.status": reverse(enums.AdGroupAdStatus),
+  'ad_group_ad.ad.type': reverse(enums.AdType),
+  'ad_group_ad.ad_strength': reverse(enums.AdStrength),
   "asset_link.status": reverse(enums.AssetLinkStatus),
   "asset_set_link.status": reverse(enums.AssetSetLinkStatus),
   "customer.status": reverse(enums.CustomerStatus),
+  "conversion_action.category": reverse(enums.ConversionActionCategory),
+  "conversion_action.type": reverse(enums.ConversionActionType),
+  "conversion_action.counting_type": reverse(enums.ConversionActionCountingType),
+  "conversion_action.origin": reverse(enums.ConversionOrigin),
+  "conversion_action.status": reverse(enums.ConversionActionStatus),
+  "conversion_action.attribution_model_settings.attribution_model": reverse(enums.AttributionModel),
+  "conversion_action.attribution_model_settings.data_driven_model_status": reverse(enums.DataDrivenModelStatus),
   // Add more if you query them:
   "change_event.change_resource_type": reverse(enums.ChangeEventResourceType),
   "change_event.resource_change_operation": reverse(enums.ResourceChangeOperation),
   "change_event.client_type": reverse(enums.ChangeClientType),
+  "search_term_view.status": reverse(enums.SearchTermTargetingStatus),
 };
 
 function toSnake(s) {

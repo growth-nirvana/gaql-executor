@@ -36,6 +36,7 @@ const ENUM_MAPS = {
   "change_event.change_resource_type": reverse(enums.ChangeEventResourceType),
   "change_event.resource_change_operation": reverse(enums.ResourceChangeOperation),
   "change_event.client_type": reverse(enums.ChangeClientType),
+  "search_term_view.status": reverse(enums.SearchTermTargetingStatus),
 };
 
 function toSnake(s) {

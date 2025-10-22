@@ -182,6 +182,7 @@ function groupRows(rows, cfg = {}) {
     limit,
     rollup = false,
     nulls = "exclude",
+    expressions = {},
   } = cfg;
 
   if (!Array.isArray(rows) || rows.length === 0) return [];
@@ -295,7 +296,18 @@ function groupRows(rows, cfg = {}) {
     
       if (String(d.as).includes(".")) setAtPath(row, d.as, value);
       else row[d.as] = value;
-    }   
+    }
+    
+    // >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    // NEW: post-compute expressions mixing current, previous, delta
+    if (expressions && typeof expressions === "object") {
+      for (const [path, fn] of Object.entries(expressions)) {
+        const val = typeof fn === "function" ? fn(row) : fn;
+        setAtPath(row, path, val);
+      }
+    }
+    // <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
     out.push(row);
   }
 

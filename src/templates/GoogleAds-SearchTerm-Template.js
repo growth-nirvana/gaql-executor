@@ -1,21 +1,20 @@
 const { BaseTemplate } = require('./BaseTemplate');
 
-class GoogleAdsKeywordTemplate extends BaseTemplate {
+class GoogleAdsSearchTermTemplate extends BaseTemplate {
 
   static getBaseReport() {
     return {
-      entity: 'keyword_view',
+      entity: 'search_term_view',
       attributes: [
-        'keyword_view.resource_name',
+        'search_term_view.resource_name',
         'customer.id',
         'customer.descriptive_name',
         'campaign.id',
         'campaign.name',
         'ad_group.id',
         'ad_group.name',
-        'ad_group_criterion.criterion_id',
-        'ad_group_criterion.keyword.match_type',
-        'ad_group_criterion.keyword.text',
+        'search_term_view.search_term',
+        'search_term_view.status',
       ],
       metrics: [
         'metrics.cost_micros',
@@ -24,8 +23,14 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         'metrics.conversions',
         'metrics.conversions_value'
       ],
+      segments: [
+        'segments.keyword.info.match_type',
+        'segments.keyword.info.text',
+      ],
       constraints: [
-        { key: "metrics.impressions", op: ">", val: 0 }
+        { key: "metrics.impressions", op: ">", val: 0 },
+        { key: "metrics.clicks", op: ">", val: 20 },
+        // { key: "metrics.cost_micros", op: ">", val: 20000000 },
       ],
       order: [
         { field: "metrics.cost_micros", sort_order: "DESC" }
@@ -304,18 +309,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: [
-            'keyword_view.resource_name',
-            'customer.id',
-            'customer.descriptive_name',
-            'campaign.id',
-            'campaign.name',
-            'ad_group.id',
-            'ad_group.name',
-            'ad_group_criterion.criterion_id',
-            'ad_group_criterion.keyword.match_type',
-            'ad_group_criterion.keyword.text',
-          ],
+          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
           metric: "diagnostics.cpa_worsen_impact",
           n: 20,
           include: [
@@ -345,18 +339,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: [
-            'keyword_view.resource_name',
-            'customer.id',
-            'customer.descriptive_name',
-            'campaign.id',
-            'campaign.name',
-            'ad_group.id',
-            'ad_group.name',
-            'ad_group_criterion.criterion_id',
-            'ad_group_criterion.keyword.match_type',
-            'ad_group_criterion.keyword.text',
-          ],
+          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
           metric: "diagnostics.cpa_improve_impact",
           n: 20,
           include: [
@@ -386,18 +369,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: [
-            'keyword_view.resource_name',
-            'customer.id',
-            'customer.descriptive_name',
-            'campaign.id',
-            'campaign.name',
-            'ad_group.id',
-            'ad_group.name',
-            'ad_group_criterion.criterion_id',
-            'ad_group_criterion.keyword.match_type',
-            'ad_group_criterion.keyword.text',
-          ],
+          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
           metric: "diagnostics.cvr_drop_impact",
           n: 20,
           include: [
@@ -427,18 +399,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: [
-            'keyword_view.resource_name',
-            'customer.id',
-            'customer.descriptive_name',
-            'campaign.id',
-            'campaign.name',
-            'ad_group.id',
-            'ad_group.name',
-            'ad_group_criterion.criterion_id',
-            'ad_group_criterion.keyword.match_type',
-            'ad_group_criterion.keyword.text',
-          ],
+          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
           metric: "diagnostics.cvr_improve_impact",
           n: 20,
           include: [
@@ -468,18 +429,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: [
-            'keyword_view.resource_name',
-            'customer.id',
-            'customer.descriptive_name',
-            'campaign.id',
-            'campaign.name',
-            'ad_group.id',
-            'ad_group.name',
-            'ad_group_criterion.criterion_id',
-            'ad_group_criterion.keyword.match_type',
-            'ad_group_criterion.keyword.text',
-          ],
+          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
           metric: "diagnostics.cpc_rise_impact",
           n: 20,
           include: [
@@ -509,18 +459,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: [
-            'keyword_view.resource_name',
-            'customer.id',
-            'customer.descriptive_name',
-            'campaign.id',
-            'campaign.name',
-            'ad_group.id',
-            'ad_group.name',
-            'ad_group_criterion.criterion_id',
-            'ad_group_criterion.keyword.match_type',
-            'ad_group_criterion.keyword.text',
-          ],
+          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
           metric: "diagnostics.cpc_fall_impact",
           n: 20,
           include: [
@@ -613,7 +552,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             // "meta": (s) => (delete s._util, s.meta) // optional
           }
         },
-        { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
+        { use: "pruneRows", mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",
@@ -623,4 +562,5 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
   }
 }
 
-module.exports = { GoogleAdsKeywordTemplate };
+module.exports = { GoogleAdsSearchTermTemplate };
+

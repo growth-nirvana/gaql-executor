@@ -24,36 +24,47 @@ const { getAtPath, setAtPath } = require('./utils');
 
 
 function topNStep(rows, config, ctx) {
-  const { by, metric, n = 10, include = [], excludeRollup = true, direction = "desc", as } = config;
-  // console.log(JSON.stringify(config, null, 2));
-  
-  // Filter out rollup rows if needed
-  const filteredRows = excludeRollup ? 
-    rows.filter(row => !row.__rollup) : rows;
-  
-  // Sort by metric - descending for top N, ascending for bottom N
-  const sorted = filteredRows.sort((a, b) => {
-    const aVal = getAtPath(a, metric) || 0;
-    const bVal = getAtPath(b, metric) || 0;
+  const {
+    by = [],
+    metric,
+    n = 10,
+    include = [],
+    excludeRollup = true,
+    direction = "desc",  // "desc" = top, "asc" = bottom
+    as,
+    includeNulls = false // optional: set true to copy null/undefined too
+  } = config;
+
+  // 1) filter (optionally drop rollups)
+  const filteredRows = excludeRollup ? rows.filter(r => !r.__rollup) : rows;
+
+  // 2) sort by metric without mutating original order
+  const sorted = [...filteredRows].sort((a, b) => {
+    const aVal = getAtPath(a, metric) ?? 0;
+    const bVal = getAtPath(b, metric) ?? 0;
     return direction === "asc" ? aVal - bVal : bVal - aVal;
   });
-  
-  // Take top N and select only needed fields
+
+  // 3) build selection list (dedup)
+  const fieldsToCopy = Array.from(new Set([ ...by, metric, ...include ]));
+
+  // 4) slice & project
   const topN = sorted.slice(0, n).map(row => {
-    const result = {};
-    by.forEach(field => {
-      setAtPath(result, field, getAtPath(row, field));
-    });
-    setAtPath(result, metric, getAtPath(row, metric));
-    return result;
+    const out = {};
+    for (const path of fieldsToCopy) {
+      const val = getAtPath(row, path);
+      if (includeNulls || val !== undefined) setAtPath(out, path, val);
+    }
+    return out;
   });
-  // Store in context for envelope
+
+  // 5) stash for envelope
   if (ctx && ctx.state) {
-    ctx.state.envelopeData = ctx.state.envelopeData || {};
-    ctx.state.envelopeData[as] = topN;
+    ctx.state.envelopeData ||= {};
+    ctx.state.envelopeData[as || "topN"] = topN;
   }
-  
-  return rows; // Don't modify the main data
+
+  return rows; // keep main stream unchanged
 }
 
 module.exports = { topNStep };

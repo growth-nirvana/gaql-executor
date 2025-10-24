@@ -309,7 +309,9 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
           metric: "diagnostics.cpa_worsen_impact",
           n: 20,
           include: [
@@ -339,7 +341,9 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
           metric: "diagnostics.cpa_improve_impact",
           n: 20,
           include: [
@@ -369,7 +373,9 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
           metric: "diagnostics.cvr_drop_impact",
           n: 20,
           include: [
@@ -399,7 +405,9 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
           metric: "diagnostics.cvr_improve_impact",
           n: 20,
           include: [
@@ -429,7 +437,9 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
           metric: "diagnostics.cpc_rise_impact",
           n: 20,
           include: [
@@ -459,7 +469,9 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
         },
         { 
           use: "topN",
-          by: ["search_term_view.search_term", "search_term_view.status", "customer.id", "customer.descriptive_name"],
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
           metric: "diagnostics.cpc_fall_impact",
           n: 20,
           include: [

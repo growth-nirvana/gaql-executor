@@ -78,6 +78,8 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
           nulls: "include",
           orderBy: [{ field: "campaign.name", dir: "ASC" }],
         },
+        // Add filter step if filters are configured
+        ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",

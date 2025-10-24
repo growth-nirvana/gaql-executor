@@ -20,12 +20,16 @@ class BaseTemplate {
   // Generic method that works for all subclasses
   static calculateGroupByAttributes(config) {
     const baseReport = this.getBaseReport();
-    const allowedAttributes = baseReport.attributes;
+    const allowedAttributes = baseReport.attributes || [];
+    const allowedSegments = baseReport.segments || [];
     
     if (config.attributes && config.attributes.length > 0) {
-      return config.attributes.filter(attr => allowedAttributes.includes(attr));
+      // Filter requested attributes against both attributes and segments
+      const allAllowedFields = [...allowedAttributes, ...allowedSegments];
+      return config.attributes.filter(attr => allAllowedFields.includes(attr));
     } else {
-      return allowedAttributes;
+      // Default: only use attributes, not segments
+      return [...allowedAttributes, ...allowedSegments];
     }
   }
 

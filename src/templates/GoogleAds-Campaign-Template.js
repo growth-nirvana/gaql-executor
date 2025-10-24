@@ -67,6 +67,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           nulls: "include",
           orderBy: [{ field: "campaign.name", dir: "ASC" }],
         },
+        ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",
@@ -503,6 +504,8 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           excludeRollup: true,
           as: "top_n_cpc_falls_by_impact",
         },
+        // Add filter step if filters are configured
+        ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
         {
           use: "rollupEnvelope",
           as: "account_rollup",
@@ -568,7 +571,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             // "meta": (s) => (delete s._util, s.meta) // optional
           }
         },
-        { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
+        // { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",

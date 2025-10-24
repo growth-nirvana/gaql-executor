@@ -13,6 +13,7 @@ const { enrichWithConversionActions } = require("./google-ads/conversion-actions
 const { topNStep } = require("./top-n");
 const { derive } = require("./derive");
 const { rollupEnvelopeStep } = require("./rollup-envelope");
+const { filterStep } = require("./filter");
 
 function withTraits(fn, traits) {
   fn.traits = traits;

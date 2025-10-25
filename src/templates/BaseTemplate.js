@@ -38,6 +38,11 @@ class BaseTemplate {
     return config.baselineMode || "previous_period";
   }
 
+  // Generic method to get periods baseline mode from config
+  static calculatePeriodsBaselineMode(config) {
+    return config.periodsBaselineMode || "previous_period";
+  }
+
   // Generic method to get filter configuration from config
   static calculateFilters(config) {
     // Default: no filters (returns null so the filter step can be conditionally added)

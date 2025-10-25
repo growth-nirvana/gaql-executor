@@ -53,7 +53,7 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
       credentials,
       report,
       pipeline: [
-        { use: "periods", baseline: { mode: "previous_month_same_span" } },
+        { use: "periods", baseline: { mode: this.calculatePeriodsBaselineMode(config) } },
         { use: "statusesReadable" },
         { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
         { 

@@ -88,6 +88,27 @@ function rollupEnvelopeStep(rows, cfg = {}, ctx) {
     }
   }
 
+  // 2b) Handle multi-customer scenarios
+  if (copyFromFirst.includes("customer.id") && scan.length > 1) {
+    const customerIds = new Set();
+    const customerNames = new Set();
+    
+    for (const row of scan) {
+      const customerId = getAtPath(row, "customer.id");
+      const customerName = getAtPath(row, "customer.descriptive_name");
+      
+      if (customerId !== undefined) customerIds.add(customerId);
+      if (customerName !== undefined) customerNames.add(customerName);
+    }
+    
+    // If multiple customers, create a multi-customer summary
+    if (customerIds.size > 1) {
+      setAtPath(summary, "customer.id", Array.from(customerIds));
+      setAtPath(summary, "customer.descriptive_name", Array.from(customerNames));
+      setAtPath(summary, "customer.count", customerIds.size);
+    }
+  }
+
   // 3) Sums
   for (const path of sum) {
     let total = 0;

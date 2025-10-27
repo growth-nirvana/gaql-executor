@@ -35,7 +35,7 @@ const STEPS = {
     (rows, cfg /*, ctx */) => formatMicrosRows(rows, cfg),
     { phase: "pre", changesCardinality: false }
   ),
-  filter: withTraits((rows, cfg) => filterStep(rows, cfg), {
+  filter: withTraits((rows, cfg, ctx) => filterStep(rows, cfg, ctx), {
     phase: "pre",
     changesCardinality: false
   }),

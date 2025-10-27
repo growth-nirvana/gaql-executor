@@ -54,7 +54,6 @@ function formatYmd(d) {
   return `${y}-${m}-${day}`;
 }
 function lastDayOfMonthUTC(year, monthIndex0) {
-  // monthIndex0: 0..11
   return new Date(Date.UTC(year, monthIndex0 + 1, 0)).getUTCDate();
 }
 function shiftYearClamp(d, deltaYears) {
@@ -94,7 +93,7 @@ function resolveBaseline(report, cfg) {
   const from = report?.from_date;
   const to = report?.to_date;
 
-  if (!from || !to) return null; // we don’t try to derive from date_constant yet
+  if (!from || !to) return null;
 
   if (mode === "previous_year" || mode === "yoy") {
     return prevYearSameSpan(from, to);
@@ -103,28 +102,18 @@ function resolveBaseline(report, cfg) {
   return prevRangeSameLength(from, to);
 }
 
-// ----- main step (augment mode) -----
 /**
  * cfg:
  * {
- *   baseline?: {
- *     mode?: "previous_period" | "previous_year" | "yoy",
- *     from_date?: "YYYY-MM-DD", to_date?: "YYYY-MM-DD"
- *   },
- *   keys?: string[],                 // else inferred from prior group (by + timeBucket)
+ *   baseline?: { mode?: "previous_period"|"previous_year"|"yoy", from_date?:string, to_date?:string },
+ *   keys?: string[],            // else inferred from prior group step (by + timeBucket)
  *   measures: [
- *     { field: "metrics.cost", kind: "absolute" },
- *     { field: "metrics.clicks", kind: "absolute" },
- *     { field: "metrics.impressions", kind: "absolute" },
- *     { field: "metrics.ctr", kind: "ratio", num: "metrics.clicks", den: "metrics.impressions" },
- *     { field: "metrics.cpc", kind: "ratio", num: "metrics.cost",   den: "metrics.clicks" }
+ *     { field:"metrics.cost", kind:"absolute" }, ...,
+ *     { field:"metrics.cpc",  kind:"ratio", num:"metrics.cost", den:"metrics.clicks" }
  *   ],
- *   emit?: {
- *     previous?: "metrics_prev",
- *     delta_abs?: "metrics_delta",
- *     delta_pct?: "metrics_delta_pct"
- *   },
- *   policies?: { pctOnZero?: "null" | "0" | "inf" }
+ *   emit?:   { previous?: "metrics_prev", delta_abs?: "metrics_delta", delta_pct?: "metrics_delta_pct" },
+ *   policies?: { pctOnZero?: "null" | "0" | "inf" },
+ *   filterMode?: "both" | "current_only" | "previous_only" | "none"   // default "both"
  * }
  */
 async function deltaAugment(rows, cfg = {}, ctx) {
@@ -146,28 +135,56 @@ async function deltaAugment(rows, cfg = {}, ctx) {
 
   // 2) baseline
   let baseline =
-  (ctx?.state?.periods && ctx.state.periods.baseline) ||
-  resolveBaseline(ctx?.options?.report, cfg);
+    (ctx?.state?.periods && ctx.state.periods.baseline) ||
+    resolveBaseline(ctx?.options?.report, cfg);
+
   if (!baseline || !baseline.from_date || !baseline.to_date) {
     console.warn("[delta] Missing baseline; provide cfg.baseline or report.from_date/to_date. Skipping delta.");
     return rows;
   }
 
-  // 3) previous rows: fetch → pre-normalize → group (to match current schema)
-  const prevRaw = await ctx.fetch(
-    { from_date: baseline.from_date, to_date: baseline.to_date },
-    "previous"
-  );
-  const prevNorm = await ctx.runPre(prevRaw);
-  const prevGrouped = gcfg ? groupRows(prevNorm, gcfg) : prevNorm;
+  // 3) fetch & group previous
+  const prevRaw      = await ctx.fetch({ from_date: baseline.from_date, to_date: baseline.to_date }, "previous");
+  const prevNorm     = await ctx.runPre(prevRaw);
+  const prevGrouped  = gcfg ? groupRows(prevNorm, gcfg) : prevNorm;
 
-  // 4) index previous by keys
+  // 3b) apply the SAME filter to baseline if requested
+  const filterMode   = cfg.filterMode || "both";
+  const filterFn     = ctx?.state?.lastFilterFn;
+  const excludeRoll  = !!ctx?.state?.excludeRollup;
+
+
+  const filterIfNeeded = (arr, side) => {
+    if (!Array.isArray(arr)) return arr;
+    if (!filterFn) return arr;
+    if (filterMode === "none") return arr;
+    if (filterMode === "previous_only" && side !== "prev") return arr;
+    if (filterMode === "current_only"  && side !== "curr") return arr;
+    return arr.filter(filterFn);
+  };
+
+  const rowsFiltered = filterIfNeeded(rows, "curr");
+  const prevFiltered = filterIfNeeded(prevGrouped, "prev");
+
+  // 4) index both sides by keys + UNION of keys
+  
   const prevIdx = new Map();
-  for (const pr of prevGrouped) {
-    prevIdx.set(keyFromRow(pr, keys), pr);
+  for (const pr of prevFiltered) {
+    if (excludeRoll && pr?.meta?.rollup_key) continue;
+    const key = keyFromRow(pr, keys);
+    prevIdx.set(key, pr);
   }
 
-  // 5) compute deltas (augment)
+  const currIdx = new Map();
+  for (const cr of rowsFiltered) {
+    if (excludeRoll && cr?.meta?.rollup_key) continue;
+    const key = keyFromRow(cr, keys);
+    currIdx.set(key, cr);
+  }
+
+  const allKeys = new Set([...currIdx.keys(), ...prevIdx.keys()]);
+
+  // 5) compute deltas
   const nsPrev = (cfg.emit && cfg.emit.previous)   || "metrics_prev";
   const nsDAbs = (cfg.emit && cfg.emit.delta_abs)  || "metrics_delta";
   const nsDPct = (cfg.emit && cfg.emit.delta_pct)  || "metrics_delta_pct";
@@ -183,33 +200,47 @@ async function deltaAugment(rows, cfg = {}, ctx) {
 
   if (!measures.length) {
     console.warn("[delta] No measures provided; nothing to compute. Skipping.");
-    return rows;
+    return rowsFiltered;
+  }
+
+  function synthesizeCurrentRowFrom(prevRow) {
+    const stub = {};
+    // copy grouping keys so the row is identifiable/reportable
+    for (const k of keys) setAtPath(stub, k, getAtPath(prevRow, k));
+    // initialize absolute bases to zero; ratios will compute to null
+    for (const m of measures) {
+      if (m.kind === "absolute") setAtPath(stub, m.field, 0);
+    }
+    return stub;
   }
 
   const out = [];
-  for (const curr of rows) {
-    const key = keyFromRow(curr, keys);
-    const prev = prevIdx.get(key);
+  for (const k of allKeys) {
+    const currOrig = currIdx.get(k);
+    const prev     = prevIdx.get(k);
 
-    const row = Array.isArray(curr) ? [...curr] : { ...curr };
+
+    const curr = currOrig
+      ? (Array.isArray(currOrig) ? [...currOrig] : { ...currOrig })
+      : synthesizeCurrentRowFrom(prev);
 
     for (const m of measures) {
       if (m.kind === "absolute") {
-        const currVal = Number(getAtPath(row, m.field));
+        const currVal = Number(getAtPath(curr, m.field));
         const prevVal = prev != null ? Number(getAtPath(prev, m.field)) : 0;
 
         const name = leaf(m.field);
-        setAtPath(row, `${nsPrev}.${name}`, Number.isFinite(prevVal) ? prevVal : null);
+        setAtPath(curr, `${nsPrev}.${name}`, Number.isFinite(prevVal) ? prevVal : null);
 
         const abs = (Number.isFinite(currVal) ? currVal : 0) - (Number.isFinite(prevVal) ? prevVal : 0);
-        setAtPath(row, `${nsDAbs}.${name}`, Number.isFinite(abs) ? abs : null);
+        setAtPath(curr, `${nsDAbs}.${name}`, Number.isFinite(abs) ? abs : null);
 
         const pct = pctDelta(currVal, prevVal);
-        setAtPath(row, `${nsDPct}.${name}`, pct);
+        setAtPath(curr, `${nsDPct}.${name}`, pct);
 
       } else if (m.kind === "ratio") {
-        const cNum = Number(getAtPath(row, m.num));
-        const cDen = Number(getAtPath(row, m.den));
+        const cNum = Number(getAtPath(curr, m.num));
+        const cDen = Number(getAtPath(curr, m.den));
         const pNum = prev != null ? Number(getAtPath(prev, m.num)) : 0;
         const pDen = prev != null ? Number(getAtPath(prev, m.den)) : 0;
 
@@ -217,20 +248,20 @@ async function deltaAugment(rows, cfg = {}, ctx) {
         const prevRatio = safeDivide(pNum, pDen, null);
 
         const name = leaf(m.field);
-        setAtPath(row, `${nsPrev}.${name}`, prevRatio);
+        setAtPath(curr, `${nsPrev}.${name}`, prevRatio);
 
         const abs = currRatio == null || prevRatio == null ? null : currRatio - prevRatio;
-        setAtPath(row, `${nsDAbs}.${name}`, abs);
+        setAtPath(curr, `${nsDAbs}.${name}`, abs);
 
         const pct =
           prevRatio == null
             ? (pctPolicy === "0" ? 0 : pctPolicy === "inf" ? Infinity : null)
             : safeDivide(abs, prevRatio, pctPolicy === "0" ? 0 : pctPolicy === "inf" ? Infinity : null);
-        setAtPath(row, `${nsDPct}.${name}`, pct);
+        setAtPath(curr, `${nsDPct}.${name}`, pct);
       }
     }
 
-    out.push(row);
+    out.push(curr);
   }
 
   return out;

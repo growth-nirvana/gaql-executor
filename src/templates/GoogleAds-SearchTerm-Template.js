@@ -29,7 +29,7 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
       ],
       constraints: [
         { key: "metrics.impressions", op: ">", val: 0 },
-        { key: "metrics.clicks", op: ">", val: 20 },
+        { key: "metrics.clicks", op: ">", val: 0 },
         // { key: "metrics.cost_micros", op: ">", val: 20000000 },
       ],
       order: [

@@ -37,6 +37,16 @@ const ENUM_MAPS = {
   "change_event.resource_change_operation": reverse(enums.ResourceChangeOperation),
   "change_event.client_type": reverse(enums.ChangeClientType),
   "search_term_view.status": reverse(enums.SearchTermTargetingStatus),
+  "ad_group_ad.ad.responsive_search_ad.headlines.asset_performance_label": reverse(enums.AssetPerformanceLabel),
+  "ad_group_ad.ad.responsive_search_ad.headlines.policy_summary_info.policy_topic_entries.type": reverse(enums.PolicyTopicEntryType),
+  "ad_group_ad.ad.responsive_search_ad.headlines.policy_summary_info.review_status": reverse(enums.PolicyReviewStatus),
+  "ad_group_ad.ad.responsive_search_ad.headlines.policy_summary_info.approval_status": reverse(enums.PolicyApprovalStatus),
+  "ad_group_ad.ad.responsive_search_ad.headlines.pinned_field": reverse(enums.ServedAssetFieldType),
+  "ad_group_ad.ad.responsive_search_ad.descriptions.asset_performance_label": reverse(enums.AssetPerformanceLabel),
+  "ad_group_ad.ad.responsive_search_ad.descriptions.policy_summary_info.policy_topic_entries.type": reverse(enums.PolicyTopicEntryType),
+  "ad_group_ad.ad.responsive_search_ad.descriptions.policy_summary_info.review_status": reverse(enums.PolicyReviewStatus),
+  "ad_group_ad.ad.responsive_search_ad.descriptions.policy_summary_info.approval_status": reverse(enums.PolicyApprovalStatus),
+  "ad_group_ad.ad.responsive_search_ad.descriptions.pinned_field": reverse(enums.ServedAssetFieldType),
 };
 
 function toSnake(s) {

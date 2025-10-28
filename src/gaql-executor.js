@@ -214,8 +214,9 @@ class GAQLExecutor {
    * @param {string} customerId - The customer ID to create instance for
    * @returns {Object} - The customer instance
    */
-  createCustomer(customerId) {
-    const { credentials: { loginCustomerId, refreshToken } } = this.options;
+  createCustomer(customerId, customCredentials = null) {
+    const credentials = customCredentials || this.options.credentials;
+    const { loginCustomerId, refreshToken } = credentials;
     
     if (!customerId) {
       throw new Error('Customer ID is required');
@@ -311,18 +312,26 @@ class GAQLExecutor {
       throw new Error('At least one customer ID is required');
     }
 
-    // Step 1: Fetch raw data from all customers (API calls only)
+    // Step 1: Fetch raw data from all customers with per-account fallback
     const allRawRows = [];
     const customerInstances = [];
+    const accountResults = {
+      succeeded: [],
+      failed: [],
+      skipped: []
+    };
 
+    // Map of successful customer instances keyed by customerId to avoid duplicates
+    const successfulCustomers = new Map();
+    
     for (const customerId of customerIds) {
+      let rawRows = null;
+      let success = false;
+
+      // Try manager access first (with loginCustomerId)
       try {
-        // Create customer instance
         const customer = this.createCustomer(customerId);
-        customerInstances.push(customer);
         
-        // Fetch raw data ONLY
-        let rawRows;
         if (this.options.report.entity) {
           rawRows = await customer.report(this.options.report);
         } else {
@@ -331,16 +340,94 @@ class GAQLExecutor {
           rawRows = await customer.query(gaqlQuery);
         }
         
-        // Collect raw rows
-        allRawRows.push(...rawRows);
+        success = true;
+        // Only add to successful customers if not already there
+        if (!successfulCustomers.has(customerId)) {
+          successfulCustomers.set(customerId, customer);
+          customerInstances.push(customer);
+        }
         
-      } catch (error) {
-        console.error(`Error for customer ID ${customerId}:`);
-        console.error('Full error:', JSON.stringify(error, null, 2));
-        console.error('Error message:', error.message);
-        console.error('Error stack:', error.stack);
-        throw error;
+        accountResults.succeeded.push({
+          customerId,
+          accessType: 'manager',
+          rowCount: rawRows.length
+        });
+        
+      } catch (managerError) {
+        // Extract meaningful error message
+        const errorMsg = managerError?.errors?.[0]?.message || managerError?.message || String(managerError);
+        console.error(`Manager access failed for customer ID ${customerId}: ${errorMsg}`);
+        
+        // Try direct access (without loginCustomerId)
+        try {
+          // Create customer instance without loginCustomerId
+          const directCredentials = {
+            ...this.options.credentials,
+            loginCustomerId: undefined
+          };
+          
+          const customer = this.createCustomer(customerId, directCredentials);
+          
+          if (this.options.report.entity) {
+            rawRows = await customer.report(this.options.report);
+          } else {
+            const gaqlQuery = this.options.query?.gaql;
+            if (!gaqlQuery) throw new Error("Either report options or GAQL query is required");
+            rawRows = await customer.query(gaqlQuery);
+          }
+          
+          success = true;
+          // Only add to successful customers if not already there
+          if (!successfulCustomers.has(customerId)) {
+            successfulCustomers.set(customerId, customer);
+            customerInstances.push(customer);
+          }
+          
+          accountResults.succeeded.push({
+            customerId,
+            accessType: 'direct',
+            rowCount: rawRows.length
+          });
+          
+        } catch (directError) {
+          const managerMsg = managerError?.errors?.[0]?.message || managerError?.message || String(managerError);
+          const directMsg = directError?.errors?.[0]?.message || directError?.message || String(directError);
+          
+          console.error(`Both manager and direct access failed for customer ID ${customerId}:`);
+          console.error(`Manager error: ${managerMsg}`);
+          console.error(`Direct error: ${directMsg}`);
+          
+          accountResults.failed.push({
+            customerId,
+            managerError: managerMsg,
+            directError: directMsg
+          });
+          
+          // Skip this account and continue with remaining accounts
+          continue;
+        }
       }
+
+      // If we got data, add it to the collection
+      if (success && rawRows) {
+        allRawRows.push(...rawRows);
+      }
+    }
+
+    // Check if we have any successful accounts
+    if (accountResults.succeeded.length === 0) {
+      throw new Error(`All accounts failed. Failed accounts: ${accountResults.failed.map(f => f.customerId).join(', ')}`);
+    }
+
+    // Log summary to stderr so it doesn't pollute JSON output
+    console.error(`Account processing summary:`);
+    console.error(`- Succeeded: ${accountResults.succeeded.length} accounts`);
+    console.error(`- Failed: ${accountResults.failed.length} accounts`);
+    if (accountResults.succeeded.length > 0) {
+      console.error(`- Successful accounts: ${accountResults.succeeded.map(s => `${s.customerId}(${s.accessType})`).join(', ')}`);
+    }
+    if (accountResults.failed.length > 0) {
+      console.error(`- Failed accounts: ${accountResults.failed.map(f => f.customerId).join(', ')}`);
     }
 
     // Step 2: Build context with access to ALL customers
@@ -353,7 +440,19 @@ class GAQLExecutor {
     const { output } = this.options || {};
     if (output && output.mode === "envelope") {
       const meta = this.collectMeta(ctx, output);
-      return { meta, results: result };
+      return { 
+        meta, 
+        results: result,
+        accountResults: {
+          succeeded: accountResults.succeeded,
+          failed: accountResults.failed,
+          summary: {
+            total: customerIds.length,
+            succeeded: accountResults.succeeded.length,
+            failed: accountResults.failed.length
+          }
+        }
+      };
     }
     return result;
   }

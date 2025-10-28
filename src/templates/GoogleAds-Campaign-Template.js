@@ -22,7 +22,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
         'metrics.conversions',
         'metrics.conversions_value'
       ],
-      // segments: [],
+      // segments: [],  // Configure via config.segments if needed
       constraints: [
         { key: "metrics.impressions", op: ">", val: 0 }
       ],

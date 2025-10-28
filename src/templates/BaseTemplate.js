@@ -153,11 +153,14 @@ class BaseTemplate {
   }
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
+    const baseReport = this.getBaseReport();
     const report = {
-      ...this.getBaseReport(),
+      ...baseReport,
       from_date: fromDate,
       to_date: toDate,
       ...(config.constraints && { constraints: config.constraints }),
+      // Override: if config.segments is provided, use it; otherwise use base segments
+      segments: config.segments !== undefined ? config.segments : (baseReport.segments || []),
     };
 
     return new this({
@@ -175,11 +178,14 @@ class BaseTemplate {
   // Use this to get a list of items before doing deeper analysis
   // Example: Get all campaign names and IDs, then analyze specific campaigns
   static forLookup(credentials, fromDate, toDate, config = {}) {
+    const baseReport = this.getBaseReport();
     const report = {
-      ...this.getBaseReport(),
+      ...baseReport,
       from_date: fromDate,
       to_date: toDate,
       ...(config.constraints && { constraints: config.constraints }),
+      // Override: if config.segments is provided, use it; otherwise use base segments
+      segments: config.segments !== undefined ? config.segments : (baseReport.segments || []),
     };
 
     // Simplified pipeline - just basic grouping and metrics, no periods/delta

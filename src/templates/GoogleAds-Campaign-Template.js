@@ -578,6 +578,83 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
       }
     });
   }
+
+  // Lookup method with date segments for trend analysis
+  // Use this to explore a single campaign (or set of campaigns) over time to see daily trends
+  // The date segment allows the LLM to see how metrics change day-by-day
+  static forLookup(credentials, fromDate, toDate, config = {}) {
+    const baseReport = this.getBaseReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      // Include date segment for trend visibility
+      segments: config.segments !== undefined 
+        ? config.segments 
+        : ['segments.date', ...(baseReport.segments || [])],
+    };
+
+    // Pipeline with date grouping to show trends
+    const pipeline = [
+      { use: "statusesReadable" },
+      { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+    ];
+
+    // Add derived dimension steps if configured (before grouping)
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    // Group by campaign attributes + date segment (so we can see trends)
+    pipeline.push({ 
+      use: "group", 
+      by: [
+        ...this.calculateGroupByAttributes(config),
+        // Always include date in grouping when present in segments
+        ...(report.segments?.includes('segments.date') ? ['segments.date'] : []),
+      ],
+      aggregates: {
+        "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
+        "metrics.clicks":      { fn: "SUM", as: "metrics.clicks" },
+        "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+        "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+        "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
+        // derived metrics
+        "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },
+        "ctr":  { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+        "cpc":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.clicks",      as: "metrics.cpc" },
+        "cvr":  { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+        "cpa":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.conversions", as: "metrics.cpa" },
+      },
+      rollup: false, // No rollup for lookups - we want individual day rows
+      nulls: "include",
+      // Order by date first (if present), then by campaign name, then by cost
+      orderBy: [
+        ...(report.segments?.includes('segments.date') ? [{ field: "segments.date", dir: "ASC" }] : []),
+        { field: "campaign.name", dir: "ASC" },
+        { field: "metrics.cost", dir: "DESC" },
+      ],
+    });
+
+    // Add filter step if filters are configured
+    const filterConfig = this.calculateFilters(config);
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "flat", // Flat output for easier processing and trend visualization
+      }
+    });
+  }
 }
 
 module.exports = { GoogleAdsCampaignTemplate };

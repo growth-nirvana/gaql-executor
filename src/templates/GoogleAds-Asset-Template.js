@@ -1,35 +1,36 @@
 const { BaseTemplate } = require('./BaseTemplate');
 
-class GoogleAdsCampaignTemplate extends BaseTemplate {
-  
+class GoogleAdsAssetTemplate extends BaseTemplate {
+
   static getBaseReport() {
     return {
-      entity: 'campaign',
+      entity: 'asset_group_asset',
       attributes: [
-        'customer.id',
-        'customer.descriptive_name',
+        'asset_group_asset.resource_name',
+        'asset_group_asset.asset_performance_label',
+        'asset_group_asset.field_type',
+        'asset_group_asset.asset',
+        'asset_group.id',
+        'asset_group.name',
         'campaign.id',
         'campaign.name',
-        'campaign.bidding_strategy_type',
-        "campaign.advertising_channel_type",
-        "campaign_budget.amount_micros",
-        "campaign_budget.recommended_budget_amount_micros",
+        'campaign.advertising_channel_type',
+        'customer.id',
+        'customer.descriptive_name',
       ],
       metrics: [
         'metrics.cost_micros',
         'metrics.clicks',
         'metrics.impressions',
         'metrics.conversions',
-        'metrics.conversions_value'
+        'metrics.conversions_value',
       ],
-      // segments: [],  // Configure via config.segments if needed
       constraints: [
         { key: "metrics.impressions", op: ">", val: 0 }
       ],
-      limit: 1000,
-    } 
+      limit: 5000,
+    }
   }
-
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
     const report = {
@@ -44,7 +45,9 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
       pipeline: [
         { use: "periods", baseline: { mode: this.calculatePeriodsBaselineMode(config) } },
         { use: "statusesReadable" },
-        { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+        { use: "formatMicros", fields: ["metrics.cost_micros"] },
+        // Derived dimensions (if any) before grouping to match common pipeline
+        ...(this.calculateDerivedDimensions(config) ? this.calculateDerivedDimensions(config).map(d => ({ use: "deriveDimension", ...d })) : []),
         { 
           use: "group", 
           by: [
@@ -65,26 +68,21 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           },
           rollup: true,
           nulls: "include",
-          orderBy: [{ field: "campaign.name", dir: "ASC" }],
+          orderBy: [{ field: "metrics.cost", dir: "DESC" }],
         },
         ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",
           fields: ["metrics.cpc", "metrics.ctr", "metrics.cpa"],
-          include: ["mean", "median", "p"],   // mean, median, percentiles
-          percentiles: [90],                   // add p90
-          naming: "flat",                       // writes metrics.cpc_mean, metrics.cpc_median, metrics.cpc_p90, …
+          include: ["mean", "median", "p"],
+          percentiles: [90],
+          naming: "flat",
           includeRollup: false,
-          // (By default rollup rows are ignored in my implementation; if you added an includeRollup flag, leave it false)
         },
         {
           use: "delta",
-          // Optional: if omitted, it will compute previous range from report.from_date/to_date
-          // baseline: { from_date: "2025-08-01", to_date: "2025-08-31" },
-          // Optional: explicit keys; otherwise derived from prior group (by + timeBucket)
-          // keys: ["campaign.bidding_strategy_type"],
-          baseline: { mode: "previous_period" },
+          baseline: { mode: this.calculateBaselineMode(config) },
           partial:  { policy: "match_upto_day" }, 
           measures: [
             { field: "metrics.cost", kind: "absolute" },
@@ -106,21 +104,6 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           policies: { pctOnZero: "null" }
         },
         ...(this.calculatePostDeltaFilters(config) ? [{ use: "filter", ...this.calculatePostDeltaFilters(config) }] : []),
-        {
-          use: "conversionActionsEnricher",
-          report: {
-            entity: 'campaign',
-            attributes: ['customer.id', 'customer.descriptive_name', 'campaign.id', 'campaign.name'],
-            segments: ['segments.conversion_action_name'],
-            metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
-            from_date: fromDate,
-            to_date: toDate,
-            constraints: []  // Empty constraints for segment compatibility
-          },
-          joinKeys: ['customer.id', 'campaign.id'],
-          outputPath: 'conversion_actions',
-          aggregate: true
-        },
         {
           use: "derive",
           prefix: "diagnostics",     // everything lands under diagnostics.*
@@ -507,67 +490,37 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
         },
         {
           use: "rollupEnvelope",
-          as: "account_rollup",
-          rollupKey: "meta.rollup_key",
-          rollupValue: "ACCOUNT",
-          copyFromFirst: ["customer.id", "customer.descriptive_name"],
-        
-          // 1) Sum bases for current + previous
+          as: "rollup",
           sum: [
             "metrics.cost","metrics.clicks","metrics.impressions","metrics.conversions","metrics.conversions_value",
-            "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value"
+            "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value",
           ],
-        
-          // 2) Compute ratios from summed bases (never average ratios)
-          ratios: [
-            { as: "metrics.ctr", num: "metrics.clicks",              den: "metrics.impressions" },
-            { as: "metrics.cpc", num: "metrics.cost",                den: "metrics.clicks" },
-            { as: "metrics.cvr", num: "metrics.conversions",         den: "metrics.clicks" },
-            { as: "metrics.cpa", num: "metrics.cost",                den: "metrics.conversions" },
-        
-            { as: "metrics_prev.ctr", num: "metrics_prev.clicks",    den: "metrics_prev.impressions" },
-            { as: "metrics_prev.cpc", num: "metrics_prev.cost",      den: "metrics_prev.clicks" },
-            { as: "metrics_prev.cvr", num: "metrics_prev.conversions", den: "metrics_prev.clicks" },
-            { as: "metrics_prev.cpa", num: "metrics_prev.cost",      den: "metrics_prev.conversions" },
-          ],
-        
-          // 3) Deltas + pct deltas (pctOnZero => null)
           expressions: {
-            // helpers (inline closures are okay)
-            "_util.safe":   (s) => ({
+            "_util.safe": (s) => ({
               num: (x) => Number.isFinite(+x) ? +x : 0,
               pct: (cur, prev) => (prev == null || prev === 0 ? null : (cur - prev) / Math.abs(prev)),
               diff: (cur, prev) => ( (Number.isFinite(+cur) ? +cur : 0) - (Number.isFinite(+prev) ? +prev : 0) ),
             }),
-        
-            // absolute deltas (bases)
             "metrics_delta.cost":               (s) => s._util?.safe.diff(s.metrics?.cost,               s.metrics_prev?.cost),
             "metrics_delta.clicks":             (s) => s._util?.safe.diff(s.metrics?.clicks,             s.metrics_prev?.clicks),
             "metrics_delta.impressions":        (s) => s._util?.safe.diff(s.metrics?.impressions,        s.metrics_prev?.impressions),
             "metrics_delta.conversions":        (s) => s._util?.safe.diff(s.metrics?.conversions,        s.metrics_prev?.conversions),
-            "metrics_delta.conversions_value":  (s) => s._util?.safe.diff(s.metrics?.conversions_value,  s.metrics_prev?.conversions_value),
-        
-            // absolute deltas (ratios)
+            "metrics_delta.conversions_value":   (s) => s._util?.safe.diff(s.metrics?.conversions_value,   s.metrics_prev?.conversions_value),
             "metrics_delta.ctr": (s) => s._util?.safe.diff(s.metrics?.ctr, s.metrics_prev?.ctr),
             "metrics_delta.cpc": (s) => s._util?.safe.diff(s.metrics?.cpc, s.metrics_prev?.cpc),
             "metrics_delta.cvr": (s) => s._util?.safe.diff(s.metrics?.cvr, s.metrics_prev?.cvr),
             "metrics_delta.cpa": (s) => s._util?.safe.diff(s.metrics?.cpa, s.metrics_prev?.cpa),
-        
-            // percent deltas (bases) — null when prev == 0 or null (pctOnZero: "null")
+            "metrics_delta.roas": (s) => s._util?.safe.diff(s.metrics?.roas, s.metrics_prev?.roas),
             "metrics_delta_pct.cost":              (s) => s._util?.safe.pct(s.metrics?.cost,              s.metrics_prev?.cost),
             "metrics_delta_pct.clicks":            (s) => s._util?.safe.pct(s.metrics?.clicks,            s.metrics_prev?.clicks),
             "metrics_delta_pct.impressions":       (s) => s._util?.safe.pct(s.metrics?.impressions,       s.metrics_prev?.impressions),
             "metrics_delta_pct.conversions":       (s) => s._util?.safe.pct(s.metrics?.conversions,       s.metrics_prev?.conversions),
-            "metrics_delta_pct.conversions_value": (s) => s._util?.safe.pct(s.metrics?.conversions_value, s.metrics_prev?.conversions_value),
-        
-            // percent deltas (ratios) — null when prev == 0 or null
+            "metrics_delta_pct.conversions_value":  (s) => s._util?.safe.pct(s.metrics?.conversions_value,  s.metrics_prev?.conversions_value),
             "metrics_delta_pct.ctr": (s) => s._util?.safe.pct(s.metrics?.ctr, s.metrics_prev?.ctr),
             "metrics_delta_pct.cpc": (s) => s._util?.safe.pct(s.metrics?.cpc, s.metrics_prev?.cpc),
             "metrics_delta_pct.cvr": (s) => s._util?.safe.pct(s.metrics?.cvr, s.metrics_prev?.cvr),
             "metrics_delta_pct.cpa": (s) => s._util?.safe.pct(s.metrics?.cpa, s.metrics_prev?.cpa),
-        
-            // cleanup: you can drop _util if your serializer ignores unknown keys
-            // "meta": (s) => (delete s._util, s.meta) // optional
+            "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
         { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
@@ -578,6 +531,65 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
       }
     });
   }
+
+  static forLookup(credentials, fromDate, toDate, config = {}) {
+    const report = {
+      ...this.getBaseReport(),
+      from_date: fromDate,
+      to_date: toDate,
+    };
+
+    const pipeline = [
+      { use: "statusesReadable" },
+      { use: "formatMicros", fields: ["metrics.cost_micros"] },
+    ];
+
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    pipeline.push({ 
+        use: "group", 
+        by: [
+          ...this.calculateGroupByAttributes(config),
+        ],
+        aggregates: {
+          "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
+          "metrics.clicks":      { fn: "SUM", as: "metrics.clicks" },
+          "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+          "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+          "metrics.conversion_value": { fn: "SUM", as: "metrics.conversion_value" },
+          "metrics.ctr": { fn: "AVG", as: "metrics.ctr" },
+          "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },
+          "cpc":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.clicks",      as: "metrics.cpc" },
+          "cvr":  { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+          "roas": { fn: "RATIO", num: "metrics.conversion_value", den: "metrics.cost", as: "metrics.roas" },
+        },
+        rollup: false,
+        nulls: "include",
+        orderBy: [{ field: "metrics.cost", dir: "DESC" }],
+      });
+
+    const filterConfig = this.calculateFilters(config);
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "flat",
+      }
+    });
+  }
 }
 
-module.exports = { GoogleAdsCampaignTemplate };
+module.exports = { GoogleAdsAssetTemplate };
+
+
+

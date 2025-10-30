@@ -9,6 +9,7 @@ const { GoogleAdsCampaignTemplate } = require('./templates/GoogleAds-Campaign-Te
 const { GoogleAdsKeywordTemplate } = require('./templates/GoogleAds-Keyword-Template');
 const { GoogleAdsSearchTermTemplate } = require('./templates/GoogleAds-SearchTerm-Template');
 const { GoogleAdsAdTemplate } = require('./templates/GoogleAds-Ad-Template');
+const { GoogleAdsAssetTemplate } = require('./templates/GoogleAds-Asset-Template');
 const { GoogleAdsCustomerTemplate } = require('./templates/GoogleAds-Customer-Template');
 const { GoogleAdsConversionActionTemplate } = require('./templates/GoogleAds-ConversionAction-Template');
 const { toCsv, resultsToCsv, writeCsv, flattenObject } = require('./utils/csv-exporter');
@@ -22,6 +23,7 @@ module.exports = {
   GoogleAdsKeywordTemplate,
   GoogleAdsSearchTermTemplate,
   GoogleAdsAdTemplate,
+  GoogleAdsAssetTemplate,
   GoogleAdsCustomerTemplate,
   GoogleAdsConversionActionTemplate,
   // CSV utilities

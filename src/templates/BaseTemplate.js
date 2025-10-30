@@ -56,6 +56,19 @@ class BaseTemplate {
     };
   }
 
+  // Generic method to get post-delta filter configuration from config
+  static calculatePostDeltaFilters(config) {
+    // Default: no post-delta filters (returns null so the filter step can be conditionally added)
+    if (!config.postDeltaFilters || !Array.isArray(config.postDeltaFilters) || config.postDeltaFilters.length === 0) {
+      return null;
+    }
+    
+    return {
+      where: config.postDeltaFilters,
+      logic: config.postDeltaFilterLogic || config.filterLogic || "AND"
+    };
+  }
+
   // Generic method to get derived dimensions configuration from config
   static calculateDerivedDimensions(config) {
     // Default: no derived dimensions (returns null so the step can be conditionally added)
@@ -143,10 +156,16 @@ class BaseTemplate {
       }
     );
 
-    // Add filter step if filters are configured
+    // Add filter step if filters are configured (pre-delta filters)
     const filterConfig = this.calculateFilters(config);
     if (filterConfig) {
       pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    // Add post-delta filter step if postDeltaFilters are configured
+    const postDeltaFilterConfig = this.calculatePostDeltaFilters(config);
+    if (postDeltaFilterConfig) {
+      pipeline.push({ use: "filter", ...postDeltaFilterConfig });
     }
 
     return pipeline;

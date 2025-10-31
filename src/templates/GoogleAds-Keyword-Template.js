@@ -68,6 +68,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "cpc":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.clicks",      as: "metrics.cpc" },
             "cvr":  { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
             "cpa":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.conversions", as: "metrics.cpa" },
+            "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
           },
           rollup: true,
           nulls: "include",
@@ -78,7 +79,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",
-          fields: ["metrics.cpc", "metrics.ctr", "metrics.cpa"],
+          fields: ["metrics.cpc", "metrics.ctr", "metrics.cpa", "metrics.roas"],
           include: ["mean", "median", "p"],   // mean, median, percentiles
           percentiles: [90],                   // add p90
           naming: "flat",                       // writes metrics.cpc_mean, metrics.cpc_median, metrics.cpc_p90, …
@@ -103,6 +104,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             { field: "metrics.cpc", kind: "ratio", num: "metrics.cost",   den: "metrics.clicks" },
             { field: "metrics.cvr", kind: "ratio", num: "metrics.conversions", den: "metrics.clicks" },
             { field: "metrics.cpa", kind: "ratio", num: "metrics.cost",   den: "metrics.conversions" },
+            { field: "metrics.roas", kind: "ratio", num: "metrics.conversions_value", den: "metrics.cost" },
             { field: "metrics.cost_share", kind: "absolute" },
           ],
           emit: {
@@ -321,6 +323,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics.cpc",
             "metrics.cvr",
             "metrics.cpa",
+            "metrics.roas",
             "metrics.cost_share",
             "metrics_prev.cost",
             "metrics_prev.clicks",
@@ -331,6 +334,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpc",
             "metrics_prev.cvr",
             "metrics_prev.cpa",
+            "metrics_prev.roas",
             "metrics_prev.cost_share",
           ],
           excludeRollup: true,
@@ -353,6 +357,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics.cpc",
             "metrics.cvr",
             "metrics.cpa",
+            "metrics.roas",
             "metrics.cost_share",
             "metrics_prev.cost",
             "metrics_prev.clicks",
@@ -363,6 +368,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpc",
             "metrics_prev.cvr",
             "metrics_prev.cpa",
+            "metrics_prev.roas",
             "metrics_prev.cost_share",
           ],
           excludeRollup: true,
@@ -385,6 +391,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics.cpc",
             "metrics.cvr",
             "metrics.cpa",
+            "metrics.roas",
             "metrics.cost_share",
             "metrics_prev.cost",
             "metrics_prev.clicks",
@@ -395,6 +402,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpc",
             "metrics_prev.cvr",
             "metrics_prev.cpa",
+            "metrics_prev.roas",
             "metrics_prev.cost_share",
           ],
           excludeRollup: true,
@@ -417,6 +425,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics.cpc",
             "metrics.cvr",
             "metrics.cpa",
+            "metrics.roas",
             "metrics.cost_share",
             "metrics_prev.cost",
             "metrics_prev.clicks",
@@ -427,6 +436,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpc",
             "metrics_prev.cvr",
             "metrics_prev.cpa",
+            "metrics_prev.roas",
             "metrics_prev.cost_share",
           ],
           excludeRollup: true,
@@ -449,6 +459,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics.cpc",
             "metrics.cvr",
             "metrics.cpa",
+            "metrics.roas",
             "metrics.cost_share",
             "metrics_prev.cost",
             "metrics_prev.clicks",
@@ -459,6 +470,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpc",
             "metrics_prev.cvr",
             "metrics_prev.cpa",
+            "metrics_prev.roas",
             "metrics_prev.cost_share",
           ],
           excludeRollup: true,
@@ -561,7 +573,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             // "meta": (s) => (delete s._util, s.meta) // optional
           }
         },
-        { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
+        { use: "pruneRows", mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",

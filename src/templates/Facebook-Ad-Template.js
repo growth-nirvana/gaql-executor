@@ -1,99 +1,135 @@
-const { BaseTemplate } = require('./BaseTemplate');
+class FacebookAdTemplate {
+  constructor(config) {
+    this.credentials = config.credentials;
+    this.config = {
+      credentials: this.credentials,
+      report: config.report || {},
+      pipeline: config.pipeline || [],
+      output: config.output || { mode: 'envelope', include: [] },
+    }
+  }
 
-class GoogleAdsKeywordTemplate extends BaseTemplate {
+  getConfig() {
+    return this.config;
+  }
 
-  static getBaseReport() {
+  static calculateGroupByAttributes(config) {
+    const baseReport = this.getBaseAdReport();
+    const allowedAttributes = baseReport.attributes || [];
+    const allowedSegments = baseReport.segments || [];
+    
+    if (config.attributes && config.attributes.length > 0) {
+      // Filter requested attributes against both attributes and segments
+      const allAllowedFields = [...allowedAttributes, ...allowedSegments];
+      return config.attributes.filter(attr => allAllowedFields.includes(attr));
+    } else {
+      // Default: only use attributes, not segments
+      return [...allowedAttributes, ...allowedSegments];
+    }
+  }
+  
+  static getBaseAdReport() {
     return {
-      entity: 'keyword_view',
+      entity: 'ad',
       attributes: [
-        'keyword_view.resource_name',
-        'customer.id',
-        'customer.descriptive_name',
+        'account.id',
+        'account.name',
         'campaign.id',
         'campaign.name',
-        'ad_group.id',
-        'ad_group.name',
-        'ad_group_criterion.criterion_id',
-        'ad_group_criterion.keyword.match_type',
-        'ad_group_criterion.keyword.text',
+        'campaign.objective',
+        'adset.id',
+        'adset.name',
+        'ad.id',
+        'ad.name',
+        'ad.status',
+        // Include creative ID for future preview integration
+        'ad.ad_creative_id',
       ],
       metrics: [
-        'metrics.cost_micros',
+        'metrics.spend',
         'metrics.clicks',
         'metrics.impressions',
-        'metrics.conversions',
-        'metrics.conversions_value'
+        'metrics.actions',
+        'metrics.action_values',
       ],
-      constraints: [
-        { key: "metrics.impressions", op: ">", val: 0 }
-      ],
-      order: [
-        { field: "metrics.cost_micros", sort_order: "DESC" }
-      ],
-      rollup: true,
-      nulls: "include",
-      orderBy: [{ field: "metrics.cost", dir: "DESC" }],
-      limit: 5000,
-    }
+      segments: [],
+      breakdowns: [],
+    } 
   }
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
     const report = {
-      ...this.getBaseReport(),
+      ...this.getBaseAdReport(),
       from_date: fromDate,
       to_date: toDate,
     };
 
-    return new this({
+    return new FacebookAdTemplate({
       credentials,
       report,
       pipeline: [
-        { use: "periods", baseline: { mode: this.calculatePeriodsBaselineMode(config) } },
-        { use: "statusesReadable" },
-        { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+        { use: "periods", baseline: { mode: config.periodsBaselineMode || "previous_period" } },
+        { 
+          use: 'actionsToColumns',
+          sources: [
+            { from: 'metrics.actions', to: 'metrics.actions_by_type', totalAs: '_total', keepRaw: true },
+            { from: 'metrics.action_values', to: 'metrics.action_values_by_type', totalAs: '_total_value', keepRaw: true },
+          ]
+        },
         { 
           use: "group", 
           by: [
-            ...this.calculateGroupByAttributes(config),
+            'account.id',
+            'account.name',
+            'campaign.id',
+            'campaign.name',
+            'campaign.objective',
+            'adset.id',
+            'adset.name',
+            'ad.id',
+            'ad.name',
+            'ad.status',
+            'ad.ad_creative_id',
+            ...(config.attributes || []),
           ],
           aggregates: {
-            "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
-            "metrics.clicks":      { fn: "SUM", as: "metrics.clicks" },
+            "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
             "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
-            "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
-            "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
-            // derived
-            "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },
-            "ctr":  { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
-            "cpc":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.clicks",      as: "metrics.cpc" },
-            "cvr":  { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
-            "cpa":  { fn: "RATIO", num: "metrics.cost",   den: "metrics.conversions", as: "metrics.cpa" },
+            "metrics.actions._total": { fn: "SUM", as: "metrics.conversions" },
+            "metrics.action_values._total_value": { fn: "SUM", as: "metrics.conversions_value" },
+            // Sum spend and alias as cost for consistency with Google Ads templates
+            "metrics.spend": { fn: "SUM", as: "metrics.cost" },
+            // derived metrics
+            "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+            "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+            "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+            "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
             "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
           },
           rollup: true,
           nulls: "include",
-          orderBy: [{ field: "campaign.name", dir: "ASC" }],
+          orderBy: [{ field: "ad.name", dir: "ASC" }],
         },
-        // Add filter step if filters are configured
-        ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
+        ...(config.filters ? [{ use: "filter", ...config.filters }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",
           fields: ["metrics.cpc", "metrics.ctr", "metrics.cpa", "metrics.roas"],
-          include: ["mean", "median", "p"],   // mean, median, percentiles
-          percentiles: [90],                   // add p90
-          naming: "flat",                       // writes metrics.cpc_mean, metrics.cpc_median, metrics.cpc_p90, …
+          include: ["mean", "median", "p"],
+          percentiles: [90],
+          naming: "flat",
           includeRollup: false,
-          // (By default rollup rows are ignored in my implementation; if you added an includeRollup flag, leave it false)
         },
         {
           use: "delta",
-          // Optional: if omitted, it will compute previous range from report.from_date/to_date
-          // baseline: { from_date: "2025-08-01", to_date: "2025-08-31" },
-          // Optional: explicit keys; otherwise derived from prior group (by + timeBucket)
-          // keys: ["campaign.bidding_strategy_type"],
           baseline: { mode: "previous_period" },
-          partial:  { policy: "match_upto_day" }, 
+          partial: { policy: "match_upto_day" },
+          keys: [
+            'account.id',
+            'campaign.id',
+            'adset.id',
+            'ad.id',
+          ],
           measures: [
             { field: "metrics.cost", kind: "absolute" },
             { field: "metrics.clicks", kind: "absolute" },
@@ -101,9 +137,9 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             { field: "metrics.conversions", kind: "absolute" },
             { field: "metrics.conversions_value", kind: "absolute" },
             { field: "metrics.ctr", kind: "ratio", num: "metrics.clicks", den: "metrics.impressions" },
-            { field: "metrics.cpc", kind: "ratio", num: "metrics.cost",   den: "metrics.clicks" },
+            { field: "metrics.cpc", kind: "ratio", num: "metrics.cost", den: "metrics.clicks" },
             { field: "metrics.cvr", kind: "ratio", num: "metrics.conversions", den: "metrics.clicks" },
-            { field: "metrics.cpa", kind: "ratio", num: "metrics.cost",   den: "metrics.conversions" },
+            { field: "metrics.cpa", kind: "ratio", num: "metrics.cost", den: "metrics.conversions" },
             { field: "metrics.roas", kind: "ratio", num: "metrics.conversions_value", den: "metrics.cost" },
             { field: "metrics.cost_share", kind: "absolute" },
           ],
@@ -116,14 +152,14 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         },
         {
           use: "derive",
-          prefix: "diagnostics",     // everything lands under diagnostics.*
+          prefix: "diagnostics",
           add: {
-            // Basic deltas (explicit, but you can skip if already in metrics_delta)
+            // Basic deltas
             "cpa_delta": (r, H) => (r.metrics?.cpa ?? null) - (r.metrics_prev?.cpa ?? null),
             "cvr_delta": (r, H) => (r.metrics?.cvr ?? null) - (r.metrics_prev?.cvr ?? null),
             "cpc_delta": (r, H) => (r.metrics?.cpc ?? null) - (r.metrics_prev?.cpc ?? null),
       
-            // Impact scores (clip negatives where appropriate)
+            // Impact scores
             "cpa_worsen_impact": (r, H) => {
               const costCur = r.metrics?.cost ?? 0;
               const convCur = r.metrics?.conversions ?? 0;
@@ -136,26 +172,18 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
               const cpaCur = hasCur ? costCur / convCur : null;
               const cpaPre = hasPre ? costPre / convPre : null;
 
-              // Case 1: both CPAs defined → normal impact
               if (hasCur && hasPre) {
                 return H.pos(cpaCur - cpaPre) * costCur;
               }
 
-              // Case 2: prev undefined, current defined → no baseline to say it "worsened"
-              // Treat as zero impact for "worseners" (it's actually an improvement vs ∞).
               if (!hasPre && hasCur) {
                 return 0;
               }
 
-              // Case 3: current undefined, prev defined → we spent money and got 0 convs.
-              // Penalize by current spend (simple, stable). You could use prev CPA × expected convs
-              // if you prefer a richer penalty, but cost is a solid, monotonic proxy.
               if (hasPre && !hasCur) {
-                return costCur; // all spend at infinite CPA → bad
+                return costCur;
               }
 
-              // Case 4: both undefined (0 convs in both periods)
-              // Nothing to compare; flag via zero-conv waste list instead.
               return 0;
             },
 
@@ -168,121 +196,97 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
               const hasCur = convCur > 0;
               const hasPre = convPre > 0;
 
-              // CPAs when defined
               const cpaCur = hasCur ? costCur / convCur : null;
               const cpaPre = hasPre ? costPre / convPre : null;
 
-              // Case A: both defined → improvement if CPA dropped
               if (hasCur && hasPre) {
                 return H.pos((cpaPre ?? 0) - (cpaCur ?? 0)) * costCur;
               }
 
-              // Case B: prev undefined (0 conv), current defined → large improvement
-              // Use a simple, monotonic proxy (current spend now produced conversions).
               if (!hasPre && hasCur) {
-                return costCur; // you could also use convCur * (account benchmark CPA)
+                return costCur;
               }
 
-              // Case C: current undefined (0 conv) → not an improvement
-              // Case D: both undefined → no improvement
               return 0;
             },
+
             "cvr_drop_impact": (r, H) => {
               const clicksCur = r.metrics?.clicks ?? 0;
               const clicksPre = r.metrics_prev?.clicks ?? 0;
-              const convCur   = r.metrics?.conversions ?? 0;
-              const convPre   = r.metrics_prev?.conversions ?? 0;
+              const convCur = r.metrics?.conversions ?? 0;
+              const convPre = r.metrics_prev?.conversions ?? 0;
 
               const hasCur = clicksCur > 0;
               const hasPre = clicksPre > 0;
 
-              // Recompute CVR from bases; clamp to [0,1] to avoid weirdness from fractional conversions
               const cvrCur = hasCur ? H.clamp(convCur / clicksCur, 0, 1) : null;
               const cvrPre = hasPre ? H.clamp(convPre / clicksPre, 0, 1) : null;
 
-              // If both periods have traffic → normal drop calc, weighted by current clicks
               if (hasCur && hasPre) {
-                const drop = H.pos((cvrPre ?? 0) - (cvrCur ?? 0));  // only count decreases
-                return drop * clicksCur;                             // ≈ lost conversions this period
+                const drop = H.pos((cvrPre ?? 0) - (cvrCur ?? 0));
+                return drop * clicksCur;
               }
 
-              // No current clicks → no CVR problem (it’s a volume issue, captured elsewhere)
               if (!hasCur) return 0;
-
-              // Current has clicks but previous had none → no baseline to call it a drop
               if (hasCur && !hasPre) return 0;
 
-              // Fallback
               return 0;
             },
 
             "cvr_improve_impact": (r, H) => {
               const clicksCur = r.metrics?.clicks ?? 0;
               const clicksPre = r.metrics_prev?.clicks ?? 0;
-              const convCur   = r.metrics?.conversions ?? 0;
-              const convPre   = r.metrics_prev?.conversions ?? 0;
+              const convCur = r.metrics?.conversions ?? 0;
+              const convPre = r.metrics_prev?.conversions ?? 0;
 
               const hasCur = clicksCur > 0;
               const hasPre = clicksPre > 0;
 
-              // Recompute CVR from raw bases, clamped to [0, 1] for safety
               const cvrCur = hasCur ? H.clamp(convCur / clicksCur, 0, 1) : null;
               const cvrPre = hasPre ? H.clamp(convPre / clicksPre, 0, 1) : null;
 
-              // ✅ Case 1: both periods have clicks
-              // Improvement = CVR increased, weighted by current clicks
               if (hasCur && hasPre) {
-                const gain = H.pos((cvrCur ?? 0) - (cvrPre ?? 0)); // only count increases
-                return gain * clicksCur;                           // ≈ additional conversions gained
+                const gain = H.pos((cvrCur ?? 0) - (cvrPre ?? 0));
+                return gain * clicksCur;
               }
 
-              // ✅ Case 2: current period has traffic but previous didn’t
-              // Treat as a major improvement (new traffic with measurable CVR)
               if (hasCur && !hasPre && cvrCur != null) {
-                return cvrCur * clicksCur; // approximate conversions gained
+                return cvrCur * clicksCur;
               }
 
-              // 🚫 Case 3: previous had traffic but current doesn’t — can’t improve if you have no clicks
               if (!hasCur && hasPre) return 0;
 
-              // 🚫 Case 4: both have no traffic — no signal
               return 0;
             },
 
             "cpc_rise_impact": (r, H) => {
               const clicksCur = r.metrics?.clicks ?? 0;
               const clicksPre = r.metrics_prev?.clicks ?? 0;
-              const costCur   = r.metrics?.cost ?? 0;
-              const costPre   = r.metrics_prev?.cost ?? 0;
+              const costCur = r.metrics?.cost ?? 0;
+              const costPre = r.metrics_prev?.cost ?? 0;
 
               const hasCur = clicksCur > 0;
               const hasPre = clicksPre > 0;
 
-              // Recompute CPC from bases; ensure non-negative
               const cpcCur = hasCur ? Math.max(costCur / clicksCur, 0) : null;
               const cpcPre = hasPre ? Math.max(costPre / clicksPre, 0) : null;
 
-              // Case 1: both periods have clicks → normal “extra cost due to CPC rise”
               if (hasCur && hasPre) {
-                const rise = H.pos((cpcCur ?? 0) - (cpcPre ?? 0)); // only count increases
-                return rise * clicksCur; // $ extra cost this period from higher CPC
+                const rise = H.pos((cpcCur ?? 0) - (cpcPre ?? 0));
+                return rise * clicksCur;
               }
 
-              // Case 2: no current clicks → no CPC cost pressure this period (volume issue elsewhere)
               if (!hasCur) return 0;
-
-              // Case 3: current has clicks, previous had none → no baseline to claim a "rise"
               if (hasCur && !hasPre) return 0;
 
-              // Fallback
               return 0;
             },
 
             "cpc_fall_impact": (r, H) => {
               const clicksCur = r.metrics?.clicks ?? 0;
               const clicksPre = r.metrics_prev?.clicks ?? 0;
-              const costCur   = r.metrics?.cost ?? 0;
-              const costPre   = r.metrics_prev?.cost ?? 0;
+              const costCur = r.metrics?.cost ?? 0;
+              const costPre = r.metrics_prev?.cost ?? 0;
 
               const hasCur = clicksCur > 0;
               const hasPre = clicksPre > 0;
@@ -291,18 +295,16 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
               const cpcPre = hasPre ? Math.max(costPre / clicksPre, 0) : null;
 
               if (hasCur && hasPre) {
-                const fall = H.pos((cpcPre ?? 0) - (cpcCur ?? 0)); // only count decreases
-                return fall * clicksCur; // $ saved this period from lower CPC
+                const fall = H.pos((cpcPre ?? 0) - (cpcCur ?? 0));
+                return fall * clicksCur;
               }
               if (!hasCur) return 0;
               if (hasCur && !hasPre) return 0;
               return 0;
             },
       
-            // Volume-driven conversion change (clicks loss at prev CVR)
-            "volume_loss_conv":  (r, H) => H.pos((r.metrics_prev?.clicks ?? 0) - (r.metrics?.clicks ?? 0)) * (r.metrics_prev?.cvr ?? 0),
-            // “Zero-conv waste” flag
-            "zero_conv_waste":   (r, H) => ((r.metrics?.conversions ?? 0) === 0 && (r.metrics?.clicks ?? 0) >= 20) ? 1 : 0,
+            "volume_loss_conv": (r, H) => H.pos((r.metrics_prev?.clicks ?? 0) - (r.metrics?.clicks ?? 0)) * (r.metrics_prev?.cvr ?? 0),
+            "zero_conv_waste": (r, H) => ((r.metrics?.conversions ?? 0) === 0 && (r.metrics?.clicks ?? 0) >= 20) ? 1 : 0,
             "volume_gain_conv": (r, H) => H.pos((r.metrics?.clicks ?? 0) - (r.metrics_prev?.clicks ?? 0)) * (r.metrics_prev?.cvr ?? 0),
           },
         },
@@ -493,6 +495,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics.cpc",
             "metrics.cvr",
             "metrics.cpa",
+            "metrics.roas",
             "metrics.cost_share",
             "metrics_prev.cost",
             "metrics_prev.clicks",
@@ -503,6 +506,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpc",
             "metrics_prev.cvr",
             "metrics_prev.cpa",
+            "metrics_prev.roas",
             "metrics_prev.cost_share",
           ],
           excludeRollup: true,
@@ -513,7 +517,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
           as: "account_rollup",
           rollupKey: "meta.rollup_key",
           rollupValue: "ACCOUNT",
-          copyFromFirst: ["customer.id", "customer.descriptive_name"],
+          copyFromFirst: ["account.id", "account.name"],
         
           // 1) Sum bases for current + previous
           sum: [
@@ -523,59 +527,58 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         
           // 2) Compute ratios from summed bases (never average ratios)
           ratios: [
-            { as: "metrics.ctr", num: "metrics.clicks",              den: "metrics.impressions" },
-            { as: "metrics.cpc", num: "metrics.cost",                den: "metrics.clicks" },
-            { as: "metrics.cvr", num: "metrics.conversions",         den: "metrics.clicks" },
-            { as: "metrics.cpa", num: "metrics.cost",                den: "metrics.conversions" },
-            { as: "metrics.roas", num: "metrics.conversions_value",  den: "metrics.cost" },
+            { as: "metrics.ctr", num: "metrics.clicks", den: "metrics.impressions" },
+            { as: "metrics.cpc", num: "metrics.cost", den: "metrics.clicks" },
+            { as: "metrics.cvr", num: "metrics.conversions", den: "metrics.clicks" },
+            { as: "metrics.cpa", num: "metrics.cost", den: "metrics.conversions" },
+            { as: "metrics.roas", num: "metrics.conversions_value", den: "metrics.cost" },
         
-            { as: "metrics_prev.ctr", num: "metrics_prev.clicks",    den: "metrics_prev.impressions" },
-            { as: "metrics_prev.cpc", num: "metrics_prev.cost",      den: "metrics_prev.clicks" },
+            { as: "metrics_prev.ctr", num: "metrics_prev.clicks", den: "metrics_prev.impressions" },
+            { as: "metrics_prev.cpc", num: "metrics_prev.cost", den: "metrics_prev.clicks" },
             { as: "metrics_prev.cvr", num: "metrics_prev.conversions", den: "metrics_prev.clicks" },
-            { as: "metrics_prev.cpa", num: "metrics_prev.cost",      den: "metrics_prev.conversions" },
+            { as: "metrics_prev.cpa", num: "metrics_prev.cost", den: "metrics_prev.conversions" },
             { as: "metrics_prev.roas", num: "metrics_prev.conversions_value", den: "metrics_prev.cost" },
           ],
         
           // 3) Deltas + pct deltas (pctOnZero => null)
           expressions: {
-            // helpers (inline closures are okay)
-            "_util.safe":   (s) => ({
+            // helpers
+            "_util.safe": (s) => ({
               num: (x) => Number.isFinite(+x) ? +x : 0,
               pct: (cur, prev) => (prev == null || prev === 0 ? null : (cur - prev) / Math.abs(prev)),
-              diff: (cur, prev) => ( (Number.isFinite(+cur) ? +cur : 0) - (Number.isFinite(+prev) ? +prev : 0) ),
+              diff: (cur, prev) => ((Number.isFinite(+cur) ? +cur : 0) - (Number.isFinite(+prev) ? +prev : 0)),
             }),
         
             // absolute deltas (bases)
-            "metrics_delta.cost":               (s) => s._util?.safe.diff(s.metrics?.cost,               s.metrics_prev?.cost),
-            "metrics_delta.clicks":             (s) => s._util?.safe.diff(s.metrics?.clicks,             s.metrics_prev?.clicks),
-            "metrics_delta.impressions":        (s) => s._util?.safe.diff(s.metrics?.impressions,        s.metrics_prev?.impressions),
-            "metrics_delta.conversions":        (s) => s._util?.safe.diff(s.metrics?.conversions,        s.metrics_prev?.conversions),
-            "metrics_delta.conversions_value":  (s) => s._util?.safe.diff(s.metrics?.conversions_value,  s.metrics_prev?.conversions_value),
+            "metrics_delta.cost": (s) => s._util?.safe.diff(s.metrics?.cost, s.metrics_prev?.cost),
+            "metrics_delta.clicks": (s) => s._util?.safe.diff(s.metrics?.clicks, s.metrics_prev?.clicks),
+            "metrics_delta.impressions": (s) => s._util?.safe.diff(s.metrics?.impressions, s.metrics_prev?.impressions),
+            "metrics_delta.conversions": (s) => s._util?.safe.diff(s.metrics?.conversions, s.metrics_prev?.conversions),
+            "metrics_delta.conversions_value": (s) => s._util?.safe.diff(s.metrics?.conversions_value, s.metrics_prev?.conversions_value),
         
             // absolute deltas (ratios)
             "metrics_delta.ctr": (s) => s._util?.safe.diff(s.metrics?.ctr, s.metrics_prev?.ctr),
             "metrics_delta.cpc": (s) => s._util?.safe.diff(s.metrics?.cpc, s.metrics_prev?.cpc),
             "metrics_delta.cvr": (s) => s._util?.safe.diff(s.metrics?.cvr, s.metrics_prev?.cvr),
             "metrics_delta.cpa": (s) => s._util?.safe.diff(s.metrics?.cpa, s.metrics_prev?.cpa),
+            "metrics_delta.roas": (s) => s._util?.safe.diff(s.metrics?.roas, s.metrics_prev?.roas),
         
-            // percent deltas (bases) — null when prev == 0 or null (pctOnZero: "null")
-            "metrics_delta_pct.cost":              (s) => s._util?.safe.pct(s.metrics?.cost,              s.metrics_prev?.cost),
-            "metrics_delta_pct.clicks":            (s) => s._util?.safe.pct(s.metrics?.clicks,            s.metrics_prev?.clicks),
-            "metrics_delta_pct.impressions":       (s) => s._util?.safe.pct(s.metrics?.impressions,       s.metrics_prev?.impressions),
-            "metrics_delta_pct.conversions":       (s) => s._util?.safe.pct(s.metrics?.conversions,       s.metrics_prev?.conversions),
+            // percent deltas (bases)
+            "metrics_delta_pct.cost": (s) => s._util?.safe.pct(s.metrics?.cost, s.metrics_prev?.cost),
+            "metrics_delta_pct.clicks": (s) => s._util?.safe.pct(s.metrics?.clicks, s.metrics_prev?.clicks),
+            "metrics_delta_pct.impressions": (s) => s._util?.safe.pct(s.metrics?.impressions, s.metrics_prev?.impressions),
+            "metrics_delta_pct.conversions": (s) => s._util?.safe.pct(s.metrics?.conversions, s.metrics_prev?.conversions),
             "metrics_delta_pct.conversions_value": (s) => s._util?.safe.pct(s.metrics?.conversions_value, s.metrics_prev?.conversions_value),
         
-            // percent deltas (ratios) — null when prev == 0 or null
+            // percent deltas (ratios)
             "metrics_delta_pct.ctr": (s) => s._util?.safe.pct(s.metrics?.ctr, s.metrics_prev?.ctr),
             "metrics_delta_pct.cpc": (s) => s._util?.safe.pct(s.metrics?.cpc, s.metrics_prev?.cpc),
             "metrics_delta_pct.cvr": (s) => s._util?.safe.pct(s.metrics?.cvr, s.metrics_prev?.cvr),
             "metrics_delta_pct.cpa": (s) => s._util?.safe.pct(s.metrics?.cpa, s.metrics_prev?.cpa),
-        
-            // cleanup: you can drop _util if your serializer ignores unknown keys
-            // "meta": (s) => (delete s._util, s.meta) // optional
+            "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
-        { use: "pruneRows", mode: "empty", as: "rows_meta" }
+        // { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",
@@ -585,4 +588,5 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
   }
 }
 
-module.exports = { GoogleAdsKeywordTemplate };
+module.exports = { FacebookAdTemplate };
+

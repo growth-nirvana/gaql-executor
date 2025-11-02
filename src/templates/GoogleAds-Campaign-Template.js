@@ -536,11 +536,13 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             { as: "metrics.cpc", num: "metrics.cost",                den: "metrics.clicks" },
             { as: "metrics.cvr", num: "metrics.conversions",         den: "metrics.clicks" },
             { as: "metrics.cpa", num: "metrics.cost",                den: "metrics.conversions" },
+            { as: "metrics.roas", num: "metrics.conversions_value",  den: "metrics.cost" },
         
             { as: "metrics_prev.ctr", num: "metrics_prev.clicks",    den: "metrics_prev.impressions" },
             { as: "metrics_prev.cpc", num: "metrics_prev.cost",      den: "metrics_prev.clicks" },
             { as: "metrics_prev.cvr", num: "metrics_prev.conversions", den: "metrics_prev.clicks" },
             { as: "metrics_prev.cpa", num: "metrics_prev.cost",      den: "metrics_prev.conversions" },
+            { as: "metrics_prev.roas", num: "metrics_prev.conversions_value", den: "metrics_prev.cost" },
           ],
         
           // 3) Deltas + pct deltas (pctOnZero => null)
@@ -564,6 +566,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_delta.cpc": (s) => s._util?.safe.diff(s.metrics?.cpc, s.metrics_prev?.cpc),
             "metrics_delta.cvr": (s) => s._util?.safe.diff(s.metrics?.cvr, s.metrics_prev?.cvr),
             "metrics_delta.cpa": (s) => s._util?.safe.diff(s.metrics?.cpa, s.metrics_prev?.cpa),
+            "metrics_delta.roas": (s) => s._util?.safe.diff(s.metrics?.roas, s.metrics_prev?.roas),
         
             // percent deltas (bases) — null when prev == 0 or null (pctOnZero: "null")
             "metrics_delta_pct.cost":              (s) => s._util?.safe.pct(s.metrics?.cost,              s.metrics_prev?.cost),
@@ -577,6 +580,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_delta_pct.cpc": (s) => s._util?.safe.pct(s.metrics?.cpc, s.metrics_prev?.cpc),
             "metrics_delta_pct.cvr": (s) => s._util?.safe.pct(s.metrics?.cvr, s.metrics_prev?.cvr),
             "metrics_delta_pct.cpa": (s) => s._util?.safe.pct(s.metrics?.cpa, s.metrics_prev?.cpa),
+            "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
         
             // cleanup: you can drop _util if your serializer ignores unknown keys
             // "meta": (s) => (delete s._util, s.meta) // optional

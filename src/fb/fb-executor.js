@@ -20,7 +20,7 @@ class FacebookExecutor {
       },
       credentials: {
         accessToken: options.credentials?.accessToken,
-        accountId: options.credentials?.accountId, // e.g. 1234567890 (we’ll prefix act_)
+        accountId: options.credentials?.accountId, // e.g. 1234567890 (we'll prefix act_)
         appId: options.credentials?.appId,
         appSecret: options.credentials?.appSecret,
       },
@@ -40,24 +40,81 @@ class FacebookExecutor {
     this.clientInit = true;
   }
 
-  // Same async-aware pipeline runner you use elsewhere
-  async runPipeline(rows, ctx = {}) {
-    const pipe = Array.isArray(this.options.pipeline) ? this.options.pipeline : [];
-    if (pipe.length === 0) return rows;
+  isCardinalityChanging(name) {
+    const fn = name && STEPS[name];
+    return !!(fn && fn.traits && fn.traits.changesCardinality);
+  }
+
+  // Async aware pipeline with pre-steps tracking
+  async runPipeline(rows, ctx) {
+    const pipeline = Array.isArray(this.options.pipeline) ? this.options.pipeline : [];
+    if (pipeline.length === 0) return rows;
 
     let out = rows;
-    for (const step of pipe) {
+    const executedPre = [];
+    let boundaryFrozen = false;
+
+    for (const step of pipeline) {
       const fn = step && step.use && STEPS[step.use];
-      if (typeof fn === "function") {
-        out = await fn(out, step, ctx);
+      if (typeof fn !== "function") continue;
+
+      if (!boundaryFrozen && !this.isCardinalityChanging(step.use)) {
+        // still in pre phase
+        executedPre.push(step);
+      } else if (!boundaryFrozen && this.isCardinalityChanging(step.use)) {
+        // crossing the boundary for the first time -- freeze the pre list
+        ctx._freezePre(executedPre);
+        boundaryFrozen = true;
+      }
+
+      out = await fn(out, step, ctx); // supports async steps
+    }
+
+    // last check -- if we didn't freeze the pre list, do it now
+    if (!boundaryFrozen) ctx._freezePre(executedPre);
+
+    return out;
+  }
+
+  collectMeta(ctx, output = {}) {
+    const include = output.include || ["periods"]; // extensible
+    const meta = {};
+  
+    if (include.includes("periods") && ctx?.state?.periods) {
+      meta.periods = ctx.state.periods;
+    }
+    // Optional future toggles:
+    if (include.includes("group") && ctx?.state?.lastGroupCfg) {
+      meta.group = ctx.state.lastGroupCfg;
+    }
+    if (include.includes("report")) {
+      const { report } = this.options || {};
+      if (report) {
+        // keep it light; avoid dumping entire object
+        meta.report = {
+          entity: report.entity,
+          from_date: report.from_date,
+          to_date: report.to_date,
+          constraints: report.constraints,
+          order: report.order
+        };
       }
     }
-    return out;
+    
+    // Include envelope data from pipeline steps (like topN)
+    if (ctx?.state?.envelopeData) {
+      // Flatten envelopeData so each 'as' key becomes a direct property
+      Object.assign(meta, ctx.state.envelopeData);
+    }
+    
+    return meta;
   }
 
   // Build ctx enough for steps that need fetch (e.g., delta)
   buildContext() {
+    const state = Object.create(null);
     const cache = new Map();
+    
     const runWithSteps = async (rows, steps) => {
       let out = rows;
       for (const step of steps || []) {
@@ -69,8 +126,12 @@ class FacebookExecutor {
 
     const ctx = {
       options: this.options,
+      state,
       cache,
-      runPre: async (rows) => rows,
+      runPre: async (rows) => {
+        const pre = state.preStepsExecuted || [];
+        return runWithSteps(rows, pre);
+      },
       fetch: async (overrides = {}, tag = "default") => {
         // Allow steps (like delta) to fetch a different time window
         const report = { ...this.options.report, ...overrides };
@@ -79,6 +140,9 @@ class FacebookExecutor {
       },
       runWithSteps,
     };
+
+    ctx._freezePre = (executedPre) => { state.preStepsExecuted = executedPre.slice(); };
+
     return ctx;
   }
 
@@ -139,27 +203,19 @@ class FacebookExecutor {
     return { rows, raw, level, params };
   }
 
-  // Envelope output support (optional)
-  makeEnvelope(rows, meta = {}) {
-    const include = Array.isArray(this.options.output?.include)
-      ? this.options.output.include
-      : [];
-
-    const out = { meta: {}, results: rows };
-    if (include.includes("periods") && meta.periods) {
-      out.meta.periods = meta.periods;
-    }
-    return out;
-  }
-
   async execute() {
     try {
       const { rows } = await this.fetchInsights(this.options.report);
       const ctx = this.buildContext();
       const processed = await this.runPipeline(rows, ctx);
 
-      if (this.options.output?.mode === "envelope") {
-        return this.makeEnvelope(processed, { /* add periods if you run periods step */ });
+      const { output } = this.options || {};
+      if (output && output.mode === "envelope") {
+        const meta = this.collectMeta(ctx, output);
+        return { 
+          meta, 
+          results: processed
+        };
       }
       return processed;
     } catch (err) {

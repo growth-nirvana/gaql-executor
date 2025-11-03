@@ -58,16 +58,23 @@ class FacebookAdSetTemplate extends BaseTemplate {
           aggregates: {
             "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
             "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+            "metrics.reach": { fn: "SUM", as: "metrics.reach" },
+            "metrics.frequency": { fn: "SUM", as: "metrics.frequency" },
             "metrics.actions._total": { fn: "SUM", as: "metrics.conversions" },
             "metrics.action_values._total_value": { fn: "SUM", as: "metrics.conversions_value" },
             // Sum spend and alias as cost for consistency with Google Ads templates
             "metrics.spend": { fn: "SUM", as: "metrics.cost" },
+            // Auto-aggregate all action types dynamically (e.g., purchase, add_to_cart, etc.)
+            "metrics.actions_by_type.*": { fn: "SUM" },
+            "metrics.action_values_by_type.*": { fn: "SUM" },
             // derived metrics
             "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
             "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
             "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
             "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
             "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+            // Calculate frequency from impressions/reach (recalculated after aggregation)
+            "frequency_recalc": { fn: "RATIO", num: "metrics.impressions", den: "metrics.reach", as: "metrics.frequency_recalc" },
           },
           rollup: true,
           nulls: "include",
@@ -96,6 +103,8 @@ class FacebookAdSetTemplate extends BaseTemplate {
             { field: "metrics.cost", kind: "absolute" },
             { field: "metrics.clicks", kind: "absolute" },
             { field: "metrics.impressions", kind: "absolute" },
+            { field: "metrics.reach", kind: "absolute" },
+            { field: "metrics.frequency", kind: "absolute" },
             { field: "metrics.conversions", kind: "absolute" },
             { field: "metrics.conversions_value", kind: "absolute" },
             { field: "metrics.ctr", kind: "ratio", num: "metrics.clicks", den: "metrics.impressions" },
@@ -481,10 +490,13 @@ class FacebookAdSetTemplate extends BaseTemplate {
           rollupValue: "ACCOUNT",
           copyFromFirst: ["account.id", "account.name"],
         
-          // 1) Sum bases for current + previous
+          // 1) Sum bases for current + previous (with wildcard support for actions)
           sum: [
             "metrics.cost","metrics.clicks","metrics.impressions","metrics.conversions","metrics.conversions_value",
-            "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value"
+            "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value",
+            // Auto-sum all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*"
           ],
         
           // 2) Compute ratios from summed bases (never average ratios)

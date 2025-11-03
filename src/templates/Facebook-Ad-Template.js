@@ -28,6 +28,8 @@ class FacebookAdTemplate extends BaseTemplate {
         'metrics.spend',
         'metrics.clicks',
         'metrics.impressions',
+        'metrics.reach',
+        'metrics.frequency',
         'metrics.actions',
         'metrics.action_values',
       ],
@@ -42,6 +44,52 @@ class FacebookAdTemplate extends BaseTemplate {
       from_date: fromDate,
       to_date: toDate,
     };
+
+    // Allow configurable conversion action types (defaults to _total)
+    // Example: config.conversionAction = "offsite_conversion_fb_pixel_purchase"
+    //          config.conversionAction = ["purchase", "offsite_conversion_fb_pixel_purchase"] (sums multiple)
+    const conversionAction = config.conversionAction || "_total";
+    const conversionValueAction = config.conversionValueAction || config.conversionAction || "_total_value";
+    
+    // Build aggregation paths for conversions
+    const conversionActions = Array.isArray(conversionAction) ? conversionAction : [conversionAction];
+    const conversionValueActions = Array.isArray(conversionValueAction) ? conversionValueAction : [conversionValueAction];
+    
+    // Build aggregates for conversions (sum multiple action types if array provided)
+    const conversionAggregates = {};
+    if (conversionActions.length === 1 && conversionActions[0] === "_total") {
+      // Default: use _total
+      conversionAggregates["metrics.actions._total"] = { fn: "SUM", as: "metrics.conversions" };
+    } else {
+      // Sum specific action types
+      conversionAggregates["metrics.conversions"] = {
+        fn: "SUM_EXPR",
+        sources: conversionActions.map(action => 
+          action === "_total" 
+            ? "metrics.actions._total"
+            : `metrics.actions_by_type.${action}`
+        ).filter(Boolean),
+        as: "metrics.conversions"
+      };
+    }
+    
+    // Build aggregates for conversion values
+    const conversionValueAggregates = {};
+    if (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value") {
+      // Default: use _total_value
+      conversionValueAggregates["metrics.action_values._total_value"] = { fn: "SUM", as: "metrics.conversions_value" };
+    } else {
+      // Sum specific action value types
+      conversionValueAggregates["metrics.conversions_value"] = {
+        fn: "SUM_EXPR",
+        sources: conversionValueActions.map(action => 
+          action === "_total_value"
+            ? "metrics.action_values._total_value"
+            : `metrics.action_values_by_type.${action}`
+        ).filter(Boolean),
+        as: "metrics.conversions_value"
+      };
+    }
 
     return new FacebookAdTemplate({
       credentials,
@@ -63,16 +111,23 @@ class FacebookAdTemplate extends BaseTemplate {
           aggregates: {
             "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
             "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
-            "metrics.actions._total": { fn: "SUM", as: "metrics.conversions" },
-            "metrics.action_values._total_value": { fn: "SUM", as: "metrics.conversions_value" },
+            "metrics.reach": { fn: "SUM", as: "metrics.reach" },
+            "metrics.frequency": { fn: "SUM", as: "metrics.frequency" },
+            ...conversionAggregates,
+            ...conversionValueAggregates,
             // Sum spend and alias as cost for consistency with Google Ads templates
             "metrics.spend": { fn: "SUM", as: "metrics.cost" },
+            // Auto-aggregate all action types dynamically (e.g., purchase, add_to_cart, etc.)
+            "metrics.actions_by_type.*": { fn: "SUM" },
+            "metrics.action_values_by_type.*": { fn: "SUM" },
             // derived metrics
             "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
             "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
             "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
             "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
             "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+            // Calculate frequency from impressions/reach (recalculated after aggregation)
+            "frequency_recalc": { fn: "RATIO", num: "metrics.impressions", den: "metrics.reach", as: "metrics.frequency_recalc" },
           },
           rollup: true,
           nulls: "include",
@@ -102,6 +157,8 @@ class FacebookAdTemplate extends BaseTemplate {
             { field: "metrics.cost", kind: "absolute" },
             { field: "metrics.clicks", kind: "absolute" },
             { field: "metrics.impressions", kind: "absolute" },
+            { field: "metrics.reach", kind: "absolute" },
+            { field: "metrics.frequency", kind: "absolute" },
             { field: "metrics.conversions", kind: "absolute" },
             { field: "metrics.conversions_value", kind: "absolute" },
             { field: "metrics.ctr", kind: "ratio", num: "metrics.clicks", den: "metrics.impressions" },
@@ -270,6 +327,68 @@ class FacebookAdTemplate extends BaseTemplate {
               if (hasCur && !hasPre) return 0;
               return 0;
             },
+
+            "roas_worsen_impact": (r, H) => {
+              const costCur = r.metrics?.cost ?? 0;
+              const costPre = r.metrics_prev?.cost ?? 0;
+              const valueCur = r.metrics?.conversions_value ?? 0;
+              const valuePre = r.metrics_prev?.conversions_value ?? 0;
+
+              const hasCur = costCur > 0;
+              const hasPre = costPre > 0;
+
+              const roasCur = hasCur ? (valueCur / costCur) : null;
+              const roasPre = hasPre ? (valuePre / costPre) : null;
+
+              if (hasCur && hasPre) {
+                // ROAS worsened: calculate lost revenue opportunity
+                const worsen = H.pos((roasPre ?? 0) - (roasCur ?? 0));
+                return worsen * costCur;
+              }
+
+              if (!hasPre && hasCur) {
+                // No previous period: no impact to measure
+                return 0;
+              }
+
+              if (hasPre && !hasCur) {
+                // Had ROAS before, now no spend: lost opportunity
+                return (roasPre ?? 0) * costCur;
+              }
+
+              return 0;
+            },
+
+            "roas_improve_impact": (r, H) => {
+              const costCur = r.metrics?.cost ?? 0;
+              const costPre = r.metrics_prev?.cost ?? 0;
+              const valueCur = r.metrics?.conversions_value ?? 0;
+              const valuePre = r.metrics_prev?.conversions_value ?? 0;
+
+              const hasCur = costCur > 0;
+              const hasPre = costPre > 0;
+
+              const roasCur = hasCur ? (valueCur / costCur) : null;
+              const roasPre = hasPre ? (valuePre / costPre) : null;
+
+              if (hasCur && hasPre) {
+                // ROAS improved: calculate gained revenue opportunity
+                const improve = H.pos((roasCur ?? 0) - (roasPre ?? 0));
+                return improve * costCur;
+              }
+
+              if (!hasPre && hasCur && roasCur != null) {
+                // No previous period but has current ROAS: full value
+                return roasCur * costCur;
+              }
+
+              if (!hasCur && hasPre) {
+                // Had ROAS before, now no spend: no improvement
+                return 0;
+              }
+
+              return 0;
+            },
       
             "volume_loss_conv": (r, H) => H.pos((r.metrics_prev?.clicks ?? 0) - (r.metrics?.clicks ?? 0)) * (r.metrics_prev?.cvr ?? 0),
             "zero_conv_waste": (r, H) => ((r.metrics?.conversions ?? 0) === 0 && (r.metrics?.clicks ?? 0) >= 20) ? 1 : 0,
@@ -287,6 +406,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics.cost",
             "metrics.clicks",
             "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
             "metrics.conversions",
             "metrics.conversions_value",
             "metrics.ctr",
@@ -298,6 +419,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cost",
             "metrics_prev.clicks",
             "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
             "metrics_prev.conversions",
             "metrics_prev.conversions_value",
             "metrics_prev.ctr",
@@ -306,6 +429,9 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
           ],
           excludeRollup: true,
           as: "top_n_cpa_worseners_by_impact",
@@ -321,6 +447,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics.cost",
             "metrics.clicks",
             "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
             "metrics.conversions",
             "metrics.conversions_value",
             "metrics.ctr",
@@ -332,6 +460,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cost",
             "metrics_prev.clicks",
             "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
             "metrics_prev.conversions",
             "metrics_prev.conversions_value",
             "metrics_prev.ctr",
@@ -340,6 +470,9 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
           ],
           excludeRollup: true,
           as: "top_n_cpa_improvers_by_impact",
@@ -355,6 +488,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics.cost",
             "metrics.clicks",
             "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
             "metrics.conversions",
             "metrics.conversions_value",
             "metrics.ctr",
@@ -366,6 +501,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cost",
             "metrics_prev.clicks",
             "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
             "metrics_prev.conversions",
             "metrics_prev.conversions_value",
             "metrics_prev.ctr",
@@ -374,6 +511,9 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
           ],
           excludeRollup: true,
           as: "top_n_cvr_drops_by_impact",
@@ -389,6 +529,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics.cost",
             "metrics.clicks",
             "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
             "metrics.conversions",
             "metrics.conversions_value",
             "metrics.ctr",
@@ -400,6 +542,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cost",
             "metrics_prev.clicks",
             "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
             "metrics_prev.conversions",
             "metrics_prev.conversions_value",
             "metrics_prev.ctr",
@@ -408,6 +552,9 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
           ],
           excludeRollup: true,
           as: "top_n_cvr_improvers_by_impact",
@@ -423,6 +570,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics.cost",
             "metrics.clicks",
             "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
             "metrics.conversions",
             "metrics.conversions_value",
             "metrics.ctr",
@@ -434,6 +583,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cost",
             "metrics_prev.clicks",
             "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
             "metrics_prev.conversions",
             "metrics_prev.conversions_value",
             "metrics_prev.ctr",
@@ -442,6 +593,9 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
           ],
           excludeRollup: true,
           as: "top_n_cpc_rises_by_impact",
@@ -457,6 +611,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics.cost",
             "metrics.clicks",
             "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
             "metrics.conversions",
             "metrics.conversions_value",
             "metrics.ctr",
@@ -468,6 +624,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cost",
             "metrics_prev.clicks",
             "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
             "metrics_prev.conversions",
             "metrics_prev.conversions_value",
             "metrics_prev.ctr",
@@ -476,9 +634,94 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
           ],
           excludeRollup: true,
           as: "top_n_cpc_falls_by_impact",
+        },
+        { 
+          use: "topN",
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
+          metric: "diagnostics.roas_worsen_impact",
+          n: 20,
+          include: [
+            "metrics.cost",
+            "metrics.clicks",
+            "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
+            "metrics.conversions",
+            "metrics.conversions_value",
+            "metrics.ctr",
+            "metrics.cpc",
+            "metrics.cvr",
+            "metrics.cpa",
+            "metrics.roas",
+            "metrics.cost_share",
+            "metrics_prev.cost",
+            "metrics_prev.clicks",
+            "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
+            "metrics_prev.conversions",
+            "metrics_prev.conversions_value",
+            "metrics_prev.ctr",
+            "metrics_prev.cpc",
+            "metrics_prev.cvr",
+            "metrics_prev.cpa",
+            "metrics_prev.roas",
+            "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
+          ],
+          excludeRollup: true,
+          as: "top_n_roas_worseners_by_impact",
+        },
+        { 
+          use: "topN",
+          by: [
+            ...this.calculateGroupByAttributes(config),
+          ],
+          metric: "diagnostics.roas_improve_impact",
+          n: 20,
+          include: [
+            "metrics.cost",
+            "metrics.clicks",
+            "metrics.impressions",
+            "metrics.reach",
+            "metrics.frequency",
+            "metrics.conversions",
+            "metrics.conversions_value",
+            "metrics.ctr",
+            "metrics.cpc",
+            "metrics.cvr",
+            "metrics.cpa",
+            "metrics.roas",
+            "metrics.cost_share",
+            "metrics_prev.cost",
+            "metrics_prev.clicks",
+            "metrics_prev.impressions",
+            "metrics_prev.reach",
+            "metrics_prev.frequency",
+            "metrics_prev.conversions",
+            "metrics_prev.conversions_value",
+            "metrics_prev.ctr",
+            "metrics_prev.cpc",
+            "metrics_prev.cvr",
+            "metrics_prev.cpa",
+            "metrics_prev.roas",
+            "metrics_prev.cost_share",
+            // Auto-include all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*",
+          ],
+          excludeRollup: true,
+          as: "top_n_roas_improvers_by_impact",
         },
         {
           use: "rollupEnvelope",
@@ -487,10 +730,13 @@ class FacebookAdTemplate extends BaseTemplate {
           rollupValue: "ACCOUNT",
           copyFromFirst: ["account.id", "account.name"],
         
-          // 1) Sum bases for current + previous
+          // 1) Sum bases for current + previous (with wildcard support for actions)
           sum: [
             "metrics.cost","metrics.clicks","metrics.impressions","metrics.conversions","metrics.conversions_value",
-            "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value"
+            "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value",
+            // Auto-sum all action types dynamically
+            "metrics.actions_by_type.*",
+            "metrics.action_values_by_type.*"
           ],
         
           // 2) Compute ratios from summed bases (never average ratios)

@@ -101,7 +101,8 @@ function applyWhere(rows, where) {
 function initAccumulator(fn) {
   switch (fn) {
     case "SUM":
-    case "AVG":    return { sum: 0, count: 0 };
+    case "AVG":
+    case "SUM_EXPR":    return { sum: 0, count: 0 };
     case "MIN":    return { min: undefined };
     case "MAX":    return { max: undefined };
     case "COUNT":  return { count: 0 };
@@ -114,6 +115,7 @@ function stepAccumulator(acc, fn, value) {
   switch (fn) {
     case "SUM":
     case "AVG":
+    case "SUM_EXPR":
       if (value != null && value !== "") {
         const n = Number(value);
         if (Number.isFinite(n)) {
@@ -139,7 +141,8 @@ function stepAccumulator(acc, fn, value) {
 
 function finalizeAccumulator(acc, fn) {
   switch (fn) {
-    case "SUM":   return acc.sum;
+    case "SUM":
+    case "SUM_EXPR":   return acc.sum;
     case "AVG":   return acc.count ? acc.sum / acc.count : 0;
     case "MIN":   return acc.min;
     case "MAX":   return acc.max;
@@ -226,10 +229,46 @@ function groupRows(rows, cfg = {}) {
     return stableStringify(dims);
   }
 
-  // 3) Split aggregate configs into base vs derived
+  // 3) Expand wildcard patterns and split aggregate configs into base vs derived
+  const expandedAggregates = {};
+  
+  // First pass: expand wildcards (e.g., "metrics.actions_by_type.*")
+  for (const [fieldOrAlias, spec] of Object.entries(aggregates)) {
+    if (fieldOrAlias.endsWith(".*")) {
+      // Wildcard pattern - discover all fields under this path
+      const basePath = fieldOrAlias.slice(0, -2); // Remove ".*"
+      const discovered = new Set();
+      
+      // Scan rows to find all keys under the base path
+      for (const row of filtered) {
+        const baseObj = getAtPath(row, basePath);
+        if (baseObj && typeof baseObj === "object" && !Array.isArray(baseObj)) {
+          for (const key of Object.keys(baseObj)) {
+            if (key !== "__proto__" && typeof baseObj[key] === "number") {
+              discovered.add(key);
+            }
+          }
+        }
+      }
+      
+      // Expand each discovered field
+      for (const key of discovered) {
+        const fullPath = `${basePath}.${key}`;
+        expandedAggregates[fullPath] = {
+          ...spec,
+          as: spec.as ? `${spec.as}.${key}` : fullPath
+        };
+      }
+    } else {
+      // Regular field - keep as is
+      expandedAggregates[fieldOrAlias] = spec;
+    }
+  }
+  
+  // Now process expanded aggregates
   const baseAggs = [];
   const derivedAggs = [];
-  for (const [fieldOrAlias, spec] of Object.entries(aggregates)) {
+  for (const [fieldOrAlias, spec] of Object.entries(expandedAggregates)) {
     const fn = String(spec.fn || "").toUpperCase();
     const as = spec.as || inferAlias(fieldOrAlias, fn);
     const entry = { fieldOrAlias, fn, as, spec };
@@ -263,6 +302,14 @@ function groupRows(rows, cfg = {}) {
       let val;
       if (b.fn === "COUNT") {
         val = 1;
+      } else if (b.fn === "SUM_EXPR" && b.spec && Array.isArray(b.spec.sources)) {
+        // SUM_EXPR: sum multiple source fields together
+        val = 0;
+        for (const sourcePath of b.spec.sources) {
+          const sourceVal = getAtPath(row, sourcePath);
+          const n = Number(sourceVal);
+          if (Number.isFinite(n)) val += n;
+        }
       } else {
         val = getAtPath(row, b.fieldOrAlias);
       }
@@ -319,7 +366,7 @@ function groupRows(rows, cfg = {}) {
       const asPath = b.as;
       const fn = b.fn;
   
-      if (["SUM", "COUNT"].includes(fn)) {
+      if (["SUM", "SUM_EXPR", "COUNT"].includes(fn)) {
         const sum = out.reduce((s, r) => s + (Number(getAtPath(r, asPath)) || 0), 0);
         if (String(asPath).includes(".")) setAtPath(total, asPath, sum);
         else total[asPath] = sum;

@@ -45,8 +45,36 @@ function topNStep(rows, config, ctx) {
     return direction === "asc" ? aVal - bVal : bVal - aVal;
   });
 
-  // 3) build selection list (dedup)
-  const fieldsToCopy = Array.from(new Set([ ...by, metric, ...include ]));
+  // 3) build selection list (dedup) with wildcard expansion
+  const fieldsToCopy = new Set([...by, metric]);
+  
+  // Expand wildcards in include array (e.g., "metrics.actions_by_type.*")
+  for (const path of include) {
+    if (path.endsWith(".*")) {
+      // Wildcard pattern - discover all fields under this path
+      const basePath = path.slice(0, -2); // Remove ".*"
+      const discovered = new Set();
+      
+      // Scan rows to find all keys under the base path
+      for (const row of filteredRows) {
+        const baseObj = getAtPath(row, basePath);
+        if (baseObj && typeof baseObj === "object" && !Array.isArray(baseObj)) {
+          for (const key of Object.keys(baseObj)) {
+            if (key !== "__proto__") {
+              discovered.add(`${basePath}.${key}`);
+            }
+          }
+        }
+      }
+      
+      // Add all discovered fields
+      for (const fullPath of discovered) {
+        fieldsToCopy.add(fullPath);
+      }
+    } else {
+      fieldsToCopy.add(path);
+    }
+  }
 
   // 4) slice & project
   const topN = sorted.slice(0, n).map(row => {

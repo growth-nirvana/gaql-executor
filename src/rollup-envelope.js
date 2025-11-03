@@ -109,8 +109,37 @@ function rollupEnvelopeStep(rows, cfg = {}, ctx) {
     }
   }
 
-  // 3) Sums
+  // 3) Sums (with wildcard support)
+  const expandedSum = [];
   for (const path of sum) {
+    if (path.endsWith(".*")) {
+      // Wildcard pattern - discover all fields under this path
+      const basePath = path.slice(0, -2); // Remove ".*"
+      const discovered = new Set();
+      
+      // Scan rows to find all numeric keys under the base path
+      for (const row of scan) {
+        const baseObj = getAtPath(row, basePath);
+        if (baseObj && typeof baseObj === "object" && !Array.isArray(baseObj)) {
+          for (const key of Object.keys(baseObj)) {
+            if (key !== "__proto__" && typeof baseObj[key] === "number") {
+              discovered.add(key);
+            }
+          }
+        }
+      }
+      
+      // Expand each discovered field
+      for (const key of discovered) {
+        expandedSum.push(`${basePath}.${key}`);
+      }
+    } else {
+      expandedSum.push(path);
+    }
+  }
+  
+  // Sum all fields (including expanded wildcards)
+  for (const path of expandedSum) {
     let total = 0;
     for (const row of scan) total += safeNumber(getAtPath(row, path));
     setAtPath(summary, path, total);

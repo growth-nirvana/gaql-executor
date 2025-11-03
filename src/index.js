@@ -5,7 +5,9 @@
 const { GAQLExecutor } = require('./gaql-executor');
 const { FacebookExecutor } = require('./fb/fb-executor');
 const { FacebookCampaignTemplate } = require('./templates/Facebook-Campaign-Template');
+const { FacebookAdSetTemplate } = require('./templates/Facebook-AdSet-Template');
 const { FacebookAdTemplate } = require('./templates/Facebook-Ad-Template');
+const { FacebookCreativePreviewTemplate } = require('./templates/Facebook-Creative-Preview-Template');
 const { GoogleAdsCampaignTemplate } = require('./templates/GoogleAds-Campaign-Template');
 const { GoogleAdsKeywordTemplate } = require('./templates/GoogleAds-Keyword-Template');
 const { GoogleAdsSearchTermTemplate } = require('./templates/GoogleAds-SearchTerm-Template');
@@ -21,7 +23,9 @@ module.exports = {
   GAQLExecutor,
   FacebookExecutor,
   FacebookCampaignTemplate,
+  FacebookAdSetTemplate,
   FacebookAdTemplate,
+  FacebookCreativePreviewTemplate,
   GoogleAdsCampaignTemplate,
   GoogleAdsKeywordTemplate,
   GoogleAdsSearchTermTemplate,

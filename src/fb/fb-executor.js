@@ -6,18 +6,26 @@ const { FacebookAdsApi, AdAccount } = bizSdk;
 
 class FacebookExecutor {
   constructor(options = {}) {
+    // For standard reports, extract specific fields
+    // For custom reports (like creative_preview), preserve all fields
+    const report = options.report || {};
+    const isCustomReport = report.entity === 'creative_preview' || report.entity === 'creative_data';
+    
     this.options = {
-      report: {
-        entity: options.report?.entity,        // account|campaign|ad_set|ad
-        attributes: options.report?.attributes || [],
-        metrics: options.report?.metrics || [],
-        segments: options.report?.segments || [],
-        constraints: options.report?.constraints || [],
-        from_date: options.report?.from_date,
-        to_date: options.report?.to_date,
-        limit: options.report?.limit,
-        order: options.report?.order,
-      },
+      report: isCustomReport 
+        ? { ...report } // Preserve all fields for custom reports
+        : {
+            entity: report.entity,        // account|campaign|ad_set|ad
+            attributes: report.attributes || [],
+            metrics: report.metrics || [],
+            segments: report.segments || [],
+            constraints: report.constraints || [],
+            from_date: report.from_date,
+            to_date: report.to_date,
+            limit: report.limit,
+            order: report.order,
+            parameters: report.parameters, // Preserve parameters for async, page_all, etc.
+          },
       credentials: {
         accessToken: options.credentials?.accessToken,
         accountId: options.credentials?.accountId, // e.g. 1234567890 (we'll prefix act_)
@@ -158,6 +166,58 @@ class FacebookExecutor {
     const pageAll = !!report.parameters?.page_all;
     const maxPages = Number.isFinite(report.parameters?.max_pages) ? report.parameters.max_pages : 10;
 
+    // Use async POST requests to avoid rate limiting
+    const useAsync = report.parameters?.async !== false; // Default to true unless explicitly disabled
+    
+    const runAsyncInsights = async (p) => {
+      // Add async=true to params
+      const asyncParams = { ...p, async: true };
+      
+      // Submit async job
+      const job = await account.getInsights(fields, asyncParams);
+      const reportRunId = job._data?.report_run_id || job.report_run_id;
+      
+      if (!reportRunId) {
+        // If no report_run_id returned, SDK might not support async - fall back to sync
+        return await account.getInsights(fields, p).then(res => res.map((r) => r._data || r));
+      }
+      
+      // Poll for completion (Facebook recommends checking every 3-5 seconds)
+      const pollInterval = 3000; // 3 seconds
+      const maxWaitTime = 300000; // 5 minutes max
+      const startTime = Date.now();
+      
+      while (Date.now() - startTime < maxWaitTime) {
+        await new Promise(resolve => setTimeout(resolve, pollInterval));
+        
+        try {
+          // Check job status via the AdReportRun API object
+          const Api = bizSdk;
+          const reportRun = new Api.AdReportRun(reportRunId);
+          await reportRun.read(['async_status', 'async_percent_completion']);
+          const status = reportRun.async_status;
+          const percent = reportRun.async_percent_completion;
+          
+          if (status === 'Job Completed' || status === 'completed') {
+            // Fetch results
+            const results = await account.getInsights(fields, { ...p, async: false, report_run_id: reportRunId });
+            return results.map((r) => r._data || r);
+          } else if (status === 'Job Failed' || status === 'failed') {
+            throw new Error(`Facebook async report failed: ${reportRunId}`);
+          }
+          // Otherwise keep polling (Job Skipped, etc. should continue)
+        } catch (pollError) {
+          // If polling fails, might be first check - continue polling
+          if (!pollError.message?.includes('failed')) {
+            continue;
+          }
+          throw pollError;
+        }
+      }
+      
+      throw new Error(`Facebook async report timed out after ${maxWaitTime}ms: ${reportRunId}`);
+    };
+
     const runCursor = async (p) => {
       let cursor = await account.getInsights(fields, p);
       const collected = [];
@@ -167,6 +227,8 @@ class FacebookExecutor {
 
       if (pageAll) {
         while (cursor.hasNext() && pages < maxPages) {
+          // Add delay between pages to avoid rate limits
+          await new Promise(resolve => setTimeout(resolve, 200)); // 200ms delay
           cursor = await cursor.next();
           collected.push(...cursor.map((r) => r._data || r));
           pages++;
@@ -175,25 +237,30 @@ class FacebookExecutor {
       return collected;
     };
 
-    const run = async (p) => {
-      const res = await account.getInsights(fields, p);
-      return res.map((r) => r._data || r);
-    };
-
     let raw;
     try {
-      raw = await runCursor(params);
+      if (useAsync) {
+        raw = await runAsyncInsights(params);
+      } else {
+        raw = await runCursor(params);
+      }
     } catch (e) {
       const msg = String(e?.message || "");
       const isInvalidCombo =
         e?.status === 400 &&
         msg.includes("action_type") &&
         msg.includes("platform_position");
+      
+      const isRateLimit = e?.status === 429 || msg.includes("rate limit") || msg.includes("too many requests");
 
-      // Retry once without action_breakdowns if that specific combo fails
-      if (isInvalidCombo && Array.isArray(params.action_breakdowns) && params.action_breakdowns.length) {
+      // If rate limited and we weren't using async, try async
+      if (isRateLimit && !useAsync) {
+        console.error("Rate limited on sync request, retrying with async...");
+        raw = await runAsyncInsights(params);
+      } else if (isInvalidCombo && Array.isArray(params.action_breakdowns) && params.action_breakdowns.length) {
+        // Retry once without action_breakdowns if that specific combo fails
         const retryParams = { ...params, action_breakdowns: [] };
-        raw = await runCursor(retryParams);
+        raw = useAsync ? await runAsyncInsights(retryParams) : await runCursor(retryParams);
       } else {
         throw e;
       }
@@ -203,8 +270,203 @@ class FacebookExecutor {
     return { rows, raw, level, params };
   }
 
+  async fetchCreativePreviews(report) {
+    this.initializeClient();
+    const { adIds, adFormat, async: useAsync } = report;
+    const bizSdk = require("facebook-nodejs-business-sdk");
+    const { Ad, AdCreative } = bizSdk;
+
+    if (!adIds || !Array.isArray(adIds) || adIds.length === 0) {
+      throw new Error('adIds must be a non-empty array in report');
+    }
+
+    // Facebook requires ad_format, default to DESKTOP_FEED_STANDARD if not provided
+    const format = adFormat || 'DESKTOP_FEED_STANDARD';
+
+    const previews = [];
+
+    // Group IDs and process in parallel (NOT using Facebook's batch API)
+    // Each ad ID gets its own separate HTTP request, executed in parallel
+    const batchSize = 50; // Process up to 50 requests in parallel
+    const useAsyncDefault = useAsync !== false;
+
+    for (let i = 0; i < adIds.length; i += batchSize) {
+      const batch = adIds.slice(i, i + batchSize);
+      
+      // Execute multiple API calls in parallel using Promise.all
+      // Each call is a separate HTTP request to Facebook
+      await Promise.all(batch.map(async (adId) => {
+        try {
+          const ad = new Ad(adId);
+          
+          // Get previews - Facebook requires ad_format parameter
+          const params = {
+            ad_format: format,
+          };
+          
+          if (useAsyncDefault) {
+            params.async = true;
+          }
+
+          // This makes a separate HTTP request for each ad ID
+          // NOT using Facebook's batch API - just parallel execution
+          const preview = await ad.getPreviews([], params);
+          
+          // If async, poll for completion
+          if (useAsyncDefault && preview._data?.report_run_id) {
+            const reportRunId = preview._data.report_run_id;
+            const Api = bizSdk;
+            const reportRun = new Api.AdReportRun(reportRunId);
+            
+            // Poll for completion (similar to Insights)
+            const pollInterval = 2000; // 2 seconds for previews
+            const maxWaitTime = 60000; // 1 minute max for previews
+            const startTime = Date.now();
+            
+            while (Date.now() - startTime < maxWaitTime) {
+              await new Promise(resolve => setTimeout(resolve, pollInterval));
+              await reportRun.read(['async_status']);
+              const status = reportRun.async_status;
+              
+              if (status === 'Job Completed' || status === 'completed') {
+                // Fetch the preview results
+                const finalPreview = await ad.getPreviews({ report_run_id: reportRunId });
+                previews.push({
+                  ad_id: adId,
+                  preview: finalPreview._data || finalPreview,
+                });
+                return;
+              } else if (status === 'Job Failed' || status === 'failed') {
+                throw new Error(`Preview generation failed for ad ${adId}`);
+              }
+            }
+            throw new Error(`Preview generation timed out for ad ${adId}`);
+          } else {
+            // Synchronous preview
+            previews.push({
+              ad_id: adId,
+              preview: preview._data || preview,
+            });
+          }
+        } catch (err) {
+          console.error(`Error fetching preview for ad ${adId}:`, err.message);
+          previews.push({
+            ad_id: adId,
+            error: err.message,
+          });
+        }
+      }));
+
+      // Add delay between batches to avoid rate limits
+      if (i + batchSize < adIds.length) {
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+
+    return previews;
+  }
+
+  async fetchCreativeData(report) {
+    this.initializeClient();
+    const { creativeIds } = report;
+    const bizSdk = require("facebook-nodejs-business-sdk");
+    const { AdCreative } = bizSdk;
+
+    if (!creativeIds || !Array.isArray(creativeIds) || creativeIds.length === 0) {
+      throw new Error('creativeIds must be a non-empty array in report');
+    }
+
+    const creatives = [];
+
+    // Batch requests
+    const batchSize = 50;
+    
+    for (let i = 0; i < creativeIds.length; i += batchSize) {
+      const batch = creativeIds.slice(i, i + batchSize);
+      
+      await Promise.all(batch.map(async (creativeId) => {
+        try {
+          const creative = new AdCreative(creativeId);
+          await creative.read([
+            'id',
+            'name',
+            'thumbnail_url',
+            'image_url',
+            'object_story_spec',
+            'body',
+            'title',
+            'link_url',
+            'call_to_action_type',
+            'format',
+          ]);
+          
+          creatives.push({
+            creative_id: creativeId,
+            thumbnail_url: creative.thumbnail_url,
+            image_url: creative.image_url,
+            name: creative.name,
+            body: creative.body,
+            title: creative.title,
+            link_url: creative.link_url,
+            call_to_action_type: creative.call_to_action_type,
+            format: creative.format,
+            object_story_spec: creative.object_story_spec,
+          });
+        } catch (err) {
+          console.error(`Error fetching creative ${creativeId}:`, err.message);
+          creatives.push({
+            creative_id: creativeId,
+            error: err.message,
+          });
+        }
+      }));
+
+      // Add delay between batches
+      if (i + batchSize < creativeIds.length) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    }
+
+    return creatives;
+  }
+
   async execute() {
     try {
+      const { report } = this.options;
+      
+      // Check if this is a creative preview request
+      if (report && report.entity === 'creative_preview') {
+        // Ensure adIds is present
+        if (!report.adIds) {
+          throw new Error('report.adIds is required for creative preview requests');
+        }
+        const previews = await this.fetchCreativePreviews(report);
+        
+        const { output } = this.options || {};
+        if (output && output.mode === "envelope") {
+          return {
+            meta: {},
+            results: previews
+          };
+        }
+        return previews;
+      }
+      
+      // Check if this is a creative data (thumbnail) request
+      if (report.entity === 'creative_data') {
+        const creatives = await this.fetchCreativeData(report);
+        
+        const { output } = this.options || {};
+        if (output && output.mode === "envelope") {
+          return {
+            meta: {},
+            results: creatives
+          };
+        }
+        return creatives;
+      }
+
+      // Standard insights request
       const { rows } = await this.fetchInsights(this.options.report);
       const ctx = this.buildContext();
       const processed = await this.runPipeline(rows, ctx);

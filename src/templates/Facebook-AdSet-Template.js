@@ -1,15 +1,15 @@
 const { BaseTemplate } = require('./BaseTemplate');
 
-class FacebookAdTemplate extends BaseTemplate {
+class FacebookAdSetTemplate extends BaseTemplate {
   
   static getBaseReport() {
-    // Alias for getBaseAdReport to work with BaseTemplate
-    return this.getBaseAdReport();
+    // Alias for getBaseAdSetReport to work with BaseTemplate
+    return this.getBaseAdSetReport();
   }
   
-  static getBaseAdReport() {
+  static getBaseAdSetReport() {
     return {
-      entity: 'ad',
+      entity: 'ad_set',
       attributes: [
         'account.id',
         'account.name',
@@ -18,18 +18,13 @@ class FacebookAdTemplate extends BaseTemplate {
         'campaign.objective',
         'adset.id',
         'adset.name',
-        'ad.id',
-        'ad.name',
-        'ad.status',
-        // Include creative ID for future preview integration
-        'ad.ad_creative_id',
       ],
       metrics: [
         'metrics.spend',
         'metrics.clicks',
         'metrics.impressions',
-        'metrics.actions',
-        'metrics.action_values',
+        "metrics.actions",
+        "metrics.action_values",
       ],
       segments: [],
       breakdowns: [],
@@ -38,12 +33,12 @@ class FacebookAdTemplate extends BaseTemplate {
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
     const report = {
-      ...this.getBaseAdReport(),
+      ...this.getBaseAdSetReport(),
       from_date: fromDate,
       to_date: toDate,
     };
 
-    return new FacebookAdTemplate({
+    return new FacebookAdSetTemplate({
       credentials,
       report,
       pipeline: [
@@ -76,7 +71,7 @@ class FacebookAdTemplate extends BaseTemplate {
           },
           rollup: true,
           nulls: "include",
-          orderBy: [{ field: "ad.name", dir: "ASC" }],
+          orderBy: [{ field: "adset.name", dir: "ASC" }],
         },
         ...(config.filters ? [{ use: "filter", ...config.filters }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
@@ -96,7 +91,6 @@ class FacebookAdTemplate extends BaseTemplate {
             'account.id',
             'campaign.id',
             'adset.id',
-            'ad.id',
           ],
           measures: [
             { field: "metrics.cost", kind: "absolute" },
@@ -556,5 +550,5 @@ class FacebookAdTemplate extends BaseTemplate {
   }
 }
 
-module.exports = { FacebookAdTemplate };
+module.exports = { FacebookAdSetTemplate };
 

@@ -36,6 +36,52 @@ class FacebookCampaignTemplate extends BaseTemplate {
       to_date: toDate,
     };
 
+    // Allow configurable conversion action types (defaults to _total)
+    // Example: config.conversionAction = "offsite_conversion_fb_pixel_purchase"
+    //          config.conversionAction = ["purchase", "offsite_conversion_fb_pixel_purchase"] (sums multiple)
+    const conversionAction = config.conversionAction || "_total";
+    const conversionValueAction = config.conversionValueAction || config.conversionAction || "_total_value";
+    
+    // Build aggregation paths for conversions
+    const conversionActions = Array.isArray(conversionAction) ? conversionAction : [conversionAction];
+    const conversionValueActions = Array.isArray(conversionValueAction) ? conversionValueAction : [conversionValueAction];
+    
+    // Build aggregates for conversions (sum multiple action types if array provided)
+    const conversionAggregates = {};
+    if (conversionActions.length === 1 && conversionActions[0] === "_total") {
+      // Default: use _total
+      conversionAggregates["metrics.actions._total"] = { fn: "SUM", as: "metrics.conversions" };
+    } else {
+      // Sum specific action types
+      conversionAggregates["metrics.conversions"] = {
+        fn: "SUM_EXPR",
+        sources: conversionActions.map(action => 
+          action === "_total" 
+            ? "metrics.actions._total"
+            : `metrics.actions_by_type.${action}`
+        ).filter(Boolean),
+        as: "metrics.conversions"
+      };
+    }
+    
+    // Build aggregates for conversion values
+    const conversionValueAggregates = {};
+    if (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value") {
+      // Default: use _total_value
+      conversionValueAggregates["metrics.action_values._total_value"] = { fn: "SUM", as: "metrics.conversions_value" };
+    } else {
+      // Sum specific action value types
+      conversionValueAggregates["metrics.conversions_value"] = {
+        fn: "SUM_EXPR",
+        sources: conversionValueActions.map(action => 
+          action === "_total_value"
+            ? "metrics.action_values._total_value"
+            : `metrics.action_values_by_type.${action}`
+        ).filter(Boolean),
+        as: "metrics.conversions_value"
+      };
+    }
+
     return new FacebookCampaignTemplate({
       credentials,
       report,
@@ -58,8 +104,8 @@ class FacebookCampaignTemplate extends BaseTemplate {
             "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
             "metrics.reach": { fn: "SUM", as: "metrics.reach" },
             "metrics.frequency": { fn: "SUM", as: "metrics.frequency" },
-            "metrics.actions._total": { fn: "SUM", as: "metrics.conversions" },
-            "metrics.action_values._total_value": { fn: "SUM", as: "metrics.conversions_value" },
+            ...conversionAggregates,
+            ...conversionValueAggregates,
             // Sum spend and alias as cost for consistency with Google Ads templates
             "metrics.spend": { fn: "SUM", as: "metrics.cost" },
             // Auto-aggregate all action types dynamically (e.g., purchase, add_to_cart, etc.)

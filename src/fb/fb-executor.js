@@ -163,74 +163,29 @@ class FacebookExecutor {
 
     const { level, fields, params } = buildInsightsQuery(report);
 
-    const pageAll = !!report.parameters?.page_all;
-    const maxPages = Number.isFinite(report.parameters?.max_pages) ? report.parameters.max_pages : 10;
+    // Default to paging through all results unless explicitly disabled
+    const pageAll = report.parameters?.page_all !== false; // Default to true
+    const maxPages = Number.isFinite(report.parameters?.max_pages) ? report.parameters.max_pages : 100; // Increased default limit
 
-    // Use async POST requests to avoid rate limiting
-    const useAsync = report.parameters?.async !== false; // Default to true unless explicitly disabled
-    
-    const runAsyncInsights = async (p) => {
-      // Add async=true to params
-      const asyncParams = { ...p, async: true };
-      
-      // Submit async job
-      const job = await account.getInsights(fields, asyncParams);
-      const reportRunId = job._data?.report_run_id || job.report_run_id;
-      
-      if (!reportRunId) {
-        // If no report_run_id returned, SDK might not support async - fall back to sync
-        return await account.getInsights(fields, p).then(res => res.map((r) => r._data || r));
-      }
-      
-      // Poll for completion (Facebook recommends checking every 3-5 seconds)
-      const pollInterval = 3000; // 3 seconds
-      const maxWaitTime = 300000; // 5 minutes max
-      const startTime = Date.now();
-      
-      while (Date.now() - startTime < maxWaitTime) {
-        await new Promise(resolve => setTimeout(resolve, pollInterval));
-        
-        try {
-          // Check job status via the AdReportRun API object
-          const Api = bizSdk;
-          const reportRun = new Api.AdReportRun(reportRunId);
-          await reportRun.read(['async_status', 'async_percent_completion']);
-          const status = reportRun.async_status;
-          const percent = reportRun.async_percent_completion;
-          
-          if (status === 'Job Completed' || status === 'completed') {
-            // Fetch results
-            const results = await account.getInsights(fields, { ...p, async: false, report_run_id: reportRunId });
-            return results.map((r) => r._data || r);
-          } else if (status === 'Job Failed' || status === 'failed') {
-            throw new Error(`Facebook async report failed: ${reportRunId}`);
-          }
-          // Otherwise keep polling (Job Skipped, etc. should continue)
-        } catch (pollError) {
-          // If polling fails, might be first check - continue polling
-          if (!pollError.message?.includes('failed')) {
-            continue;
-          }
-          throw pollError;
-        }
-      }
-      
-      throw new Error(`Facebook async report timed out after ${maxWaitTime}ms: ${reportRunId}`);
-    };
-
+    // Use sync GET requests
     const runCursor = async (p) => {
-      let cursor = await account.getInsights(fields, p);
+      // Sync request - regular getInsights (no async parameter)
+      const syncParams = { ...p };
+      delete syncParams.async; // Remove async if present
+      let cursor = await account.getInsights(fields, syncParams);
       const collected = [];
       let pages = 1;
 
       collected.push(...cursor.map((r) => r._data || r));
 
-      if (pageAll) {
+      // Always page through results by default (pageAll defaults to true)
+      if (pageAll && cursor.hasNext()) {
         while (cursor.hasNext() && pages < maxPages) {
           // Add delay between pages to avoid rate limits
           await new Promise(resolve => setTimeout(resolve, 200)); // 200ms delay
           cursor = await cursor.next();
-          collected.push(...cursor.map((r) => r._data || r));
+          const pageData = cursor.map((r) => r._data || r);
+          collected.push(...pageData);
           pages++;
         }
       }
@@ -238,31 +193,46 @@ class FacebookExecutor {
     };
 
     let raw;
-    try {
-      if (useAsync) {
-        raw = await runAsyncInsights(params);
-      } else {
+    const maxRetries = 5;
+    const baseBackoff = 2; // seconds
+    const maxBackoff = 300; // 5 minutes max
+    let retryCount = 0;
+    
+    while (retryCount <= maxRetries) {
+      try {
         raw = await runCursor(params);
-      }
-    } catch (e) {
-      const msg = String(e?.message || "");
-      const isInvalidCombo =
-        e?.status === 400 &&
-        msg.includes("action_type") &&
-        msg.includes("platform_position");
-      
-      const isRateLimit = e?.status === 429 || msg.includes("rate limit") || msg.includes("too many requests");
+        break; // Success, exit retry loop
+      } catch (e) {
+        const msg = String(e?.message || "");
+        const isInvalidCombo =
+          e?.status === 400 &&
+          msg.includes("action_type") &&
+          msg.includes("platform_position");
+        
+        const isRateLimit = e?.status === 429 || msg.includes("rate limit") || msg.includes("too many requests");
 
-      // If rate limited and we weren't using async, try async
-      if (isRateLimit && !useAsync) {
-        console.error("Rate limited on sync request, retrying with async...");
-        raw = await runAsyncInsights(params);
-      } else if (isInvalidCombo && Array.isArray(params.action_breakdowns) && params.action_breakdowns.length) {
-        // Retry once without action_breakdowns if that specific combo fails
-        const retryParams = { ...params, action_breakdowns: [] };
-        raw = useAsync ? await runAsyncInsights(retryParams) : await runCursor(retryParams);
-      } else {
-        throw e;
+        if (isInvalidCombo && Array.isArray(params.action_breakdowns) && params.action_breakdowns.length) {
+          // Retry once without action_breakdowns if that specific combo fails
+          const retryParams = { ...params, action_breakdowns: [] };
+          try {
+            raw = await runCursor(retryParams);
+            break; // Success
+          } catch (retryError) {
+            throw retryError; // If retry without action_breakdowns fails, throw
+          }
+        } else if (isRateLimit && retryCount < maxRetries) {
+          // Rate limited - exponential backoff
+          retryCount++;
+          const backoffSeconds = Math.min(baseBackoff ** retryCount, maxBackoff);
+          await new Promise(resolve => setTimeout(resolve, backoffSeconds * 1000));
+          // Continue to next iteration of while loop
+        } else if (isRateLimit && retryCount >= maxRetries) {
+          // Max retries exceeded
+          throw new Error(`Rate limit error after ${maxRetries} retries: ${msg}`);
+        } else {
+          // Not a rate limit error, throw immediately
+          throw e;
+        }
       }
     }
 

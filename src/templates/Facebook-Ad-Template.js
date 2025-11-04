@@ -91,6 +91,215 @@ class FacebookAdTemplate extends BaseTemplate {
       };
     }
 
+    // Helper function to get standard include fields for topN
+    const getTopNInclude = () => [
+      "metrics.cost",
+      "metrics.clicks",
+      "metrics.impressions",
+      "metrics.reach",
+      "metrics.frequency",
+      "metrics.conversions",
+      "metrics.conversions_value",
+      "metrics.ctr",
+      "metrics.cpc",
+      "metrics.cvr",
+      "metrics.cpa",
+      "metrics.roas",
+      "metrics.cost_share",
+      "metrics_prev.cost",
+      "metrics_prev.clicks",
+      "metrics_prev.impressions",
+      "metrics_prev.reach",
+      "metrics_prev.frequency",
+      "metrics_prev.conversions",
+      "metrics_prev.conversions_value",
+      "metrics_prev.ctr",
+      "metrics_prev.cpc",
+      "metrics_prev.cvr",
+      "metrics_prev.cpa",
+      "metrics_prev.roas",
+      "metrics_prev.cost_share",
+      // Auto-include all action types dynamically
+      "metrics.actions_by_type.*",
+      "metrics.action_values_by_type.*",
+    ];
+
+    // Configuration for topN steps
+    // config.topN can be:
+    //   - Array of strings: ['cost', 'impressions', 'cpa_worseners', ...] - only include these
+    //   - Object: { enabled: [...], n: 20 } - specify enabled and n
+    //   - undefined/null: include all (default)
+    const topNConfig = config.topN || {};
+    const topNEnabled = Array.isArray(topNConfig) 
+      ? topNConfig 
+      : (topNConfig.enabled || null); // null = all enabled
+    const topNN = topNConfig.n || 20;
+    
+    const isTopNEnabled = (name) => topNEnabled === null || topNEnabled.includes(name);
+
+    // Build topN steps array
+    const topNSteps = [];
+
+    // Impact-based topN (existing)
+    if (isTopNEnabled('cpa_worseners')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpa_worsen_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpa_worseners_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cpa_improvers')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpa_improve_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpa_improvers_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cvr_drops')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cvr_drop_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cvr_drops_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cvr_improvers')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cvr_improve_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cvr_improvers_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cpc_rises')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpc_rise_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpc_rises_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cpc_falls')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpc_fall_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpc_falls_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('roas_worseners')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.roas_worsen_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_roas_worseners_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('roas_improvers')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.roas_improve_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_roas_improvers_by_impact",
+      });
+    }
+
+    // Metric-based topN (new)
+    if (isTopNEnabled('cost')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.cost",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_cost",
+      });
+    }
+
+    if (isTopNEnabled('impressions')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.impressions",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_impressions",
+      });
+    }
+
+    if (isTopNEnabled('clicks')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.clicks",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_clicks",
+      });
+    }
+
+    if (isTopNEnabled('cpa')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.cpa",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_cpa",
+        direction: "asc", // Lower CPA is better
+      });
+    }
+
+    if (isTopNEnabled('roas')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.roas",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_roas",
+        direction: "desc", // Higher ROAS is better
+      });
+    }
+
     return new FacebookAdTemplate({
       credentials,
       report,
@@ -395,334 +604,8 @@ class FacebookAdTemplate extends BaseTemplate {
             "volume_gain_conv": (r, H) => H.pos((r.metrics?.clicks ?? 0) - (r.metrics_prev?.clicks ?? 0)) * (r.metrics_prev?.cvr ?? 0),
           },
         },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpa_worsen_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpa_worseners_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpa_improve_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpa_improvers_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cvr_drop_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_cvr_drops_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cvr_improve_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_cvr_improvers_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpc_rise_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpc_rises_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpc_fall_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpc_falls_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.roas_worsen_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_roas_worseners_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.roas_improve_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.reach",
-            "metrics.frequency",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.reach",
-            "metrics_prev.frequency",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-            // Auto-include all action types dynamically
-            "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*",
-          ],
-          excludeRollup: true,
-          as: "top_n_roas_improvers_by_impact",
-        },
+        // Add all configured topN steps
+        ...topNSteps,
         {
           use: "rollupEnvelope",
           as: "account_rollup",
@@ -792,7 +675,7 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
-        // { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
+        { use: "pruneRows", mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",

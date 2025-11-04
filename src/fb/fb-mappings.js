@@ -34,6 +34,7 @@ const METRIC_FIELDS = {
   "metrics.cpc": "cpc",
   "metrics.cpm": "cpm",
   "metrics.reach": "reach",
+  "metrics.frequency": "frequency",
   // Conversions on Meta are nuanced (actions, action_values arrays).
   // Start simple; extend later with action_attribution_windows, action_breakdowns, etc.
 

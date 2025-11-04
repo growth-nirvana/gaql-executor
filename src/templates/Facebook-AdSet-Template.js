@@ -23,6 +23,8 @@ class FacebookAdSetTemplate extends BaseTemplate {
         'metrics.spend',
         'metrics.clicks',
         'metrics.impressions',
+        'metrics.reach',
+        'metrics.frequency',
         "metrics.actions",
         "metrics.action_values",
       ],
@@ -82,6 +84,215 @@ class FacebookAdSetTemplate extends BaseTemplate {
         ).filter(Boolean),
         as: "metrics.conversions_value"
       };
+    }
+
+    // Helper function to get standard include fields for topN
+    const getTopNInclude = () => [
+      "metrics.cost",
+      "metrics.clicks",
+      "metrics.impressions",
+      "metrics.reach",
+      "metrics.frequency",
+      "metrics.conversions",
+      "metrics.conversions_value",
+      "metrics.ctr",
+      "metrics.cpc",
+      "metrics.cvr",
+      "metrics.cpa",
+      "metrics.roas",
+      "metrics.cost_share",
+      "metrics_prev.cost",
+      "metrics_prev.clicks",
+      "metrics_prev.impressions",
+      "metrics_prev.reach",
+      "metrics_prev.frequency",
+      "metrics_prev.conversions",
+      "metrics_prev.conversions_value",
+      "metrics_prev.ctr",
+      "metrics_prev.cpc",
+      "metrics_prev.cvr",
+      "metrics_prev.cpa",
+      "metrics_prev.roas",
+      "metrics_prev.cost_share",
+      // Auto-include all action types dynamically
+      "metrics.actions_by_type.*",
+      "metrics.action_values_by_type.*",
+    ];
+
+    // Configuration for topN steps
+    // config.topN can be:
+    //   - Array of strings: ['cost', 'impressions', 'cpa_worseners', ...] - only include these
+    //   - Object: { enabled: [...], n: 20 } - specify enabled and n
+    //   - undefined/null: include all (default)
+    const topNConfig = config.topN || {};
+    const topNEnabled = Array.isArray(topNConfig) 
+      ? topNConfig 
+      : (topNConfig.enabled || null); // null = all enabled
+    const topNN = topNConfig.n || 20;
+    
+    const isTopNEnabled = (name) => topNEnabled === null || topNEnabled.includes(name);
+
+    // Build topN steps array
+    const topNSteps = [];
+
+    // Impact-based topN (existing)
+    if (isTopNEnabled('cpa_worseners')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpa_worsen_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpa_worseners_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cpa_improvers')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpa_improve_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpa_improvers_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cvr_drops')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cvr_drop_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cvr_drops_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cvr_improvers')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cvr_improve_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cvr_improvers_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cpc_rises')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpc_rise_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpc_rises_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('cpc_falls')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.cpc_fall_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_cpc_falls_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('roas_worseners')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.roas_worsen_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_roas_worseners_by_impact",
+      });
+    }
+
+    if (isTopNEnabled('roas_improvers')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "diagnostics.roas_improve_impact",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_roas_improvers_by_impact",
+      });
+    }
+
+    // Metric-based topN (new)
+    if (isTopNEnabled('cost')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.cost",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_cost",
+      });
+    }
+
+    if (isTopNEnabled('impressions')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.impressions",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_impressions",
+      });
+    }
+
+    if (isTopNEnabled('clicks')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.clicks",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_clicks",
+      });
+    }
+
+    if (isTopNEnabled('cpa')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.cpa",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_cpa",
+        direction: "asc", // Lower CPA is better
+      });
+    }
+
+    if (isTopNEnabled('roas')) {
+      topNSteps.push({
+        use: "topN",
+        by: [...this.calculateGroupByAttributes(config)],
+        metric: "metrics.roas",
+        n: topNN,
+        include: getTopNInclude(),
+        excludeRollup: true,
+        as: "top_n_by_roas",
+        direction: "desc", // Higher ROAS is better
+      });
     }
 
     return new FacebookAdSetTemplate({
@@ -319,216 +530,76 @@ class FacebookAdSetTemplate extends BaseTemplate {
               if (hasCur && !hasPre) return 0;
               return 0;
             },
+
+            "roas_worsen_impact": (r, H) => {
+              const costCur = r.metrics?.cost ?? 0;
+              const costPre = r.metrics_prev?.cost ?? 0;
+              const valueCur = r.metrics?.conversions_value ?? 0;
+              const valuePre = r.metrics_prev?.conversions_value ?? 0;
+
+              const hasCur = costCur > 0;
+              const hasPre = costPre > 0;
+
+              const roasCur = hasCur ? (valueCur / costCur) : null;
+              const roasPre = hasPre ? (valuePre / costPre) : null;
+
+              if (hasCur && hasPre) {
+                // ROAS worsened: calculate lost revenue opportunity
+                const worsen = H.pos((roasPre ?? 0) - (roasCur ?? 0));
+                return worsen * costCur;
+              }
+
+              if (!hasPre && hasCur) {
+                // No previous period: no impact to measure
+                return 0;
+              }
+
+              if (hasPre && !hasCur) {
+                // Had ROAS before, now no spend: lost opportunity
+                return (roasPre ?? 0) * costCur;
+              }
+
+              return 0;
+            },
+
+            "roas_improve_impact": (r, H) => {
+              const costCur = r.metrics?.cost ?? 0;
+              const costPre = r.metrics_prev?.cost ?? 0;
+              const valueCur = r.metrics?.conversions_value ?? 0;
+              const valuePre = r.metrics_prev?.conversions_value ?? 0;
+
+              const hasCur = costCur > 0;
+              const hasPre = costPre > 0;
+
+              const roasCur = hasCur ? (valueCur / costCur) : null;
+              const roasPre = hasPre ? (valuePre / costPre) : null;
+
+              if (hasCur && hasPre) {
+                // ROAS improved: calculate gained revenue opportunity
+                const improve = H.pos((roasCur ?? 0) - (roasPre ?? 0));
+                return improve * costCur;
+              }
+
+              if (!hasPre && hasCur && roasCur != null) {
+                // No previous period but has current ROAS: full value
+                return roasCur * costCur;
+              }
+
+              if (!hasCur && hasPre) {
+                // Had ROAS before, now no spend: no improvement
+                return 0;
+              }
+
+              return 0;
+            },
       
             "volume_loss_conv": (r, H) => H.pos((r.metrics_prev?.clicks ?? 0) - (r.metrics?.clicks ?? 0)) * (r.metrics_prev?.cvr ?? 0),
             "zero_conv_waste": (r, H) => ((r.metrics?.conversions ?? 0) === 0 && (r.metrics?.clicks ?? 0) >= 20) ? 1 : 0,
             "volume_gain_conv": (r, H) => H.pos((r.metrics?.clicks ?? 0) - (r.metrics_prev?.clicks ?? 0)) * (r.metrics_prev?.cvr ?? 0),
           },
         },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpa_worsen_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpa_worseners_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpa_improve_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpa_improvers_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cvr_drop_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-          ],
-          excludeRollup: true,
-          as: "top_n_cvr_drops_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cvr_improve_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-          ],
-          excludeRollup: true,
-          as: "top_n_cvr_improvers_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpc_rise_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpc_rises_by_impact",
-        },
-        { 
-          use: "topN",
-          by: [
-            ...this.calculateGroupByAttributes(config),
-          ],
-          metric: "diagnostics.cpc_fall_impact",
-          n: 20,
-          include: [
-            "metrics.cost",
-            "metrics.clicks",
-            "metrics.impressions",
-            "metrics.conversions",
-            "metrics.conversions_value",
-            "metrics.ctr",
-            "metrics.cpc",
-            "metrics.cvr",
-            "metrics.cpa",
-            "metrics.roas",
-            "metrics.cost_share",
-            "metrics_prev.cost",
-            "metrics_prev.clicks",
-            "metrics_prev.impressions",
-            "metrics_prev.conversions",
-            "metrics_prev.conversions_value",
-            "metrics_prev.ctr",
-            "metrics_prev.cpc",
-            "metrics_prev.cvr",
-            "metrics_prev.cpa",
-            "metrics_prev.roas",
-            "metrics_prev.cost_share",
-          ],
-          excludeRollup: true,
-          as: "top_n_cpc_falls_by_impact",
-        },
+        // Add all configured topN steps
+        ...topNSteps,
         {
           use: "rollupEnvelope",
           as: "account_rollup",
@@ -598,7 +669,7 @@ class FacebookAdSetTemplate extends BaseTemplate {
             "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
-        // { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
+        { use: "pruneRows", mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",

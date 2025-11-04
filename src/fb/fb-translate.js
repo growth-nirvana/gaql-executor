@@ -141,7 +141,8 @@ function buildInsightsQuery(report) {
     ...toTime(report),
   };
 
-  if (report.limit) params.limit = report.limit;
+  // Set default limit to 500 if not specified (max page size for Facebook Insights API)
+  params.limit = report.limit || 500;
   if (report.constraints) {
     const filtering = toFiltering(
       Array.isArray(report.constraints) ? report.constraints : [report.constraints]

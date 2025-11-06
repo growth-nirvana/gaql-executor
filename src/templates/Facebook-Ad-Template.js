@@ -1,4 +1,5 @@
 const { BaseTemplate } = require('./BaseTemplate');
+const { normalizeActionList } = require('../fb/action-utils');
 
 class FacebookAdTemplate extends BaseTemplate {
   
@@ -46,18 +47,27 @@ class FacebookAdTemplate extends BaseTemplate {
     };
 
     // Allow configurable conversion action types (defaults to _total)
-    // Example: config.conversionAction = "offsite_conversion_fb_pixel_purchase"
-    //          config.conversionAction = ["purchase", "offsite_conversion_fb_pixel_purchase"] (sums multiple)
-    const conversionAction = config.conversionAction || "_total";
-    const conversionValueAction = config.conversionValueAction || config.conversionAction || "_total_value";
-    
-    // Build aggregation paths for conversions
-    const conversionActions = Array.isArray(conversionAction) ? conversionAction : [conversionAction];
-    const conversionValueActions = Array.isArray(conversionValueAction) ? conversionValueAction : [conversionValueAction];
+    // Examples:
+    //   config.conversionAction = "purchase"
+    //   config.conversionAction = ["purchase", "offsite_conversion_fb_pixel_purchase"]
+    //   config.conversionValueAction = ["purchase", "onsite_web_purchase"]
+    //
+    // Action names are automatically normalised to lowercase snake_case so you can
+    // pass either Meta's raw action name or the already-normalised key.
+    const conversionActions = normalizeActionList(
+      config.conversionAction,
+      "_total"
+    );
+    const conversionValueActions = normalizeActionList(
+      config.conversionValueAction !== undefined
+        ? config.conversionValueAction
+        : config.conversionAction,
+      "_total_value"
+    );
     
     // Build aggregates for conversions (sum multiple action types if array provided)
     const conversionAggregates = {};
-    if (conversionActions.length === 1 && conversionActions[0] === "_total") {
+    if (conversionActions.length === 0 || (conversionActions.length === 1 && conversionActions[0] === "_total")) {
       // Default: use _total
       conversionAggregates["metrics.actions._total"] = { fn: "SUM", as: "metrics.conversions" };
     } else {
@@ -75,7 +85,7 @@ class FacebookAdTemplate extends BaseTemplate {
     
     // Build aggregates for conversion values
     const conversionValueAggregates = {};
-    if (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value") {
+    if (conversionValueActions.length === 0 || (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value")) {
       // Default: use _total_value
       conversionValueAggregates["metrics.action_values._total_value"] = { fn: "SUM", as: "metrics.conversions_value" };
     } else {
@@ -675,7 +685,7 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
-        { use: "pruneRows", mode: "empty", as: "rows_meta" }
+        // { use: "pruneRows", mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",

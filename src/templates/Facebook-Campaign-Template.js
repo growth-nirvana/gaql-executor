@@ -1,4 +1,5 @@
 const { BaseTemplate } = require('./BaseTemplate');
+const { normalizeActionList } = require('../fb/action-utils');
 
 class FacebookCampaignTemplate extends BaseTemplate {
   
@@ -6,7 +7,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
     // Alias for getBaseCampaignReport to work with BaseTemplate
     return this.getBaseCampaignReport();
   }
-  
+
   static getBaseCampaignReport() {
     return {
       entity: 'campaign',
@@ -39,18 +40,27 @@ class FacebookCampaignTemplate extends BaseTemplate {
     };
 
     // Allow configurable conversion action types (defaults to _total)
-    // Example: config.conversionAction = "offsite_conversion_fb_pixel_purchase"
-    //          config.conversionAction = ["purchase", "offsite_conversion_fb_pixel_purchase"] (sums multiple)
-    const conversionAction = config.conversionAction || "_total";
-    const conversionValueAction = config.conversionValueAction || config.conversionAction || "_total_value";
-    
-    // Build aggregation paths for conversions
-    const conversionActions = Array.isArray(conversionAction) ? conversionAction : [conversionAction];
-    const conversionValueActions = Array.isArray(conversionValueAction) ? conversionValueAction : [conversionValueAction];
+    // Examples:
+    //   config.conversionAction = "purchase"
+    //   config.conversionAction = ["purchase", "offsite_conversion_fb_pixel_purchase"]
+    //   config.conversionValueAction = ["purchase", "onsite_web_purchase"]
+    //
+    // Action names are automatically normalised to lowercase snake_case so you can
+    // pass either Meta's raw action name or the already-normalised key.
+    const conversionActions = normalizeActionList(
+      config.conversionAction,
+      "_total"
+    );
+    const conversionValueActions = normalizeActionList(
+      config.conversionValueAction !== undefined
+        ? config.conversionValueAction
+        : config.conversionAction,
+      "_total_value"
+    );
     
     // Build aggregates for conversions (sum multiple action types if array provided)
     const conversionAggregates = {};
-    if (conversionActions.length === 1 && conversionActions[0] === "_total") {
+    if (conversionActions.length === 0 || (conversionActions.length === 1 && conversionActions[0] === "_total")) {
       // Default: use _total
       conversionAggregates["metrics.actions._total"] = { fn: "SUM", as: "metrics.conversions" };
     } else {
@@ -68,7 +78,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
     
     // Build aggregates for conversion values
     const conversionValueAggregates = {};
-    if (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value") {
+    if (conversionValueActions.length === 0 || (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value")) {
       // Default: use _total_value
       conversionValueAggregates["metrics.action_values._total_value"] = { fn: "SUM", as: "metrics.conversions_value" };
     } else {
@@ -671,6 +681,60 @@ class FacebookCampaignTemplate extends BaseTemplate {
       output: {
         mode: "envelope",
         include: ["periods"],
+      }
+    });
+  }
+
+  static forDimension(credentials, fromDate, toDate, config = {}) {
+    const baseReport = this.getBaseCampaignReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      segments: config.segments !== undefined ? config.segments : (baseReport.segments || []),
+    };
+
+    // Simplified pipeline - similar to change event template
+    // No metrics, just grouping for dimensions
+    const pipeline = [
+      { use: "statusesReadable" },
+    ];
+
+    // Add derived dimension steps if configured (before grouping)
+    // This allows creating new dimensions from existing attributes
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    // Group by selected attributes (no aggregates - just dimension values)
+    pipeline.push({ 
+      use: "group", 
+      by: [
+        ...this.calculateGroupByAttributes(config),
+      ],
+      aggregates: {}, // No metrics - just grouping for dimensions
+      rollup: false,
+      nulls: "include",
+      // Default ordering by campaign name
+      orderBy: config.orderBy || [{ field: "campaign.name", dir: "ASC" }],
+    });
+
+    // Add filter step if filters are configured
+    const filterConfig = this.calculateFilters(config);
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "flat", // Flat output - just the results array
       }
     });
   }

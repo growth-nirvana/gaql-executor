@@ -260,6 +260,69 @@ class BaseTemplate {
       }
     });
   }
+
+  // Method for dimension analysis - extracts unique dimension values with optional derived dimensions
+  // Similar to forLookup but without metrics - just grouping attributes to get dimension values
+  // Use this to explore available dimension values (e.g., campaign names, campaign objectives, etc.)
+  static forDimension(credentials, fromDate, toDate, config = {}) {
+    const baseReport = this.getBaseReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      // Override: if config.segments is provided, use it; otherwise use base segments
+      segments: config.segments !== undefined ? config.segments : (baseReport.segments || []),
+    };
+
+    // Simplified pipeline - similar to change event template
+    // No metrics, just grouping for dimensions
+    const pipeline = [
+      { use: "statusesReadable" },
+    ];
+
+    // Add formatMicros if applicable (override in subclass if needed)
+    if (baseReport.metrics && baseReport.metrics.some(m => m.includes('micros'))) {
+      pipeline.push({ use: "formatMicros", fields: [] }); // Empty fields - subclasses can override
+    }
+
+    // Add derived dimension steps if configured (before grouping)
+    // This allows creating new dimensions from existing attributes
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    // Group by selected attributes (no aggregates - just dimension values)
+    pipeline.push({ 
+      use: "group", 
+      by: [
+        ...this.calculateGroupByAttributes(config),
+      ],
+      aggregates: {}, // No metrics - just grouping for dimensions
+      rollup: false,
+      nulls: "include",
+      // Default ordering - subclasses can override
+      orderBy: config.orderBy || [],
+    });
+
+    // Add filter step if filters are configured
+    const filterConfig = this.calculateFilters(config);
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "flat", // Flat output - just the results array
+      }
+    });
+  }
 }
 
 module.exports = { BaseTemplate };

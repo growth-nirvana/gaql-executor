@@ -240,11 +240,52 @@ class FacebookExecutor {
     return { rows, raw, level, params };
   }
 
+  /**
+   * Helper function to process tasks with controlled concurrency (queue)
+   * Processes tasks in batches of `concurrency` at a time, with delays between requests
+   */
+  async processWithQueue(tasks, concurrency = 2, delayBetweenRequests = 300) {
+    const results = [];
+    
+    for (let i = 0; i < tasks.length; i += concurrency) {
+      const batch = tasks.slice(i, i + concurrency);
+      
+      // Process batch concurrently
+      const batchResults = await Promise.allSettled(
+        batch.map(async (task, index) => {
+          // Add delay for each request in the batch (staggered)
+          if (index > 0) {
+            await new Promise(resolve => setTimeout(resolve, delayBetweenRequests * index));
+          }
+          return await task();
+        })
+      );
+      
+      // Collect results
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled') {
+          results.push(result.value);
+        } else {
+          results.push({
+            error: result.reason?.message || String(result.reason),
+          });
+        }
+      });
+      
+      // Add delay between batches to avoid rate limiting
+      if (i + concurrency < tasks.length) {
+        await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
+      }
+    }
+    
+    return results;
+  }
+
   async fetchCreativePreviews(report) {
     this.initializeClient();
     const { adIds, adFormat, async: useAsync } = report;
     const bizSdk = require("facebook-nodejs-business-sdk");
-    const { Ad, AdCreative } = bizSdk;
+    const { Ad } = bizSdk;
 
     if (!adIds || !Array.isArray(adIds) || adIds.length === 0) {
       throw new Error('adIds must be a non-empty array in report');
@@ -252,20 +293,14 @@ class FacebookExecutor {
 
     // Facebook requires ad_format, default to DESKTOP_FEED_STANDARD if not provided
     const format = adFormat || 'DESKTOP_FEED_STANDARD';
-
-    const previews = [];
-
-    // Group IDs and process in parallel (NOT using Facebook's batch API)
-    // Each ad ID gets its own separate HTTP request, executed in parallel
-    const batchSize = 50; // Process up to 50 requests in parallel
     const useAsyncDefault = useAsync !== false;
+    
+    // Process with controlled concurrency (2 at a time) to avoid rate limiting
+    const concurrency = 2;
+    const delayBetweenRequests = 300; // 300ms delay between requests
 
-    for (let i = 0; i < adIds.length; i += batchSize) {
-      const batch = adIds.slice(i, i + batchSize);
-      
-      // Execute multiple API calls in parallel using Promise.all
-      // Each call is a separate HTTP request to Facebook
-      await Promise.all(batch.map(async (adId) => {
+    const tasks = adIds.map((adId) => {
+      return async () => {
         try {
           const ad = new Ad(adId);
           
@@ -278,8 +313,6 @@ class FacebookExecutor {
             params.async = true;
           }
 
-          // This makes a separate HTTP request for each ad ID
-          // NOT using Facebook's batch API - just parallel execution
           const preview = await ad.getPreviews([], params);
           
           // If async, poll for completion
@@ -300,40 +333,35 @@ class FacebookExecutor {
               
               if (status === 'Job Completed' || status === 'completed') {
                 // Fetch the preview results
-                const finalPreview = await ad.getPreviews({ report_run_id: reportRunId });
-                previews.push({
+                const finalPreview = await ad.getPreviews([], { report_run_id: reportRunId });
+                return {
                   ad_id: adId,
                   preview: finalPreview._data || finalPreview,
-                });
-                return;
+                };
               } else if (status === 'Job Failed' || status === 'failed') {
                 throw new Error(`Preview generation failed for ad ${adId}`);
               }
             }
+            
             throw new Error(`Preview generation timed out for ad ${adId}`);
           } else {
             // Synchronous preview
-            previews.push({
+            return {
               ad_id: adId,
               preview: preview._data || preview,
-            });
+            };
           }
         } catch (err) {
           console.error(`Error fetching preview for ad ${adId}:`, err.message);
-          previews.push({
+          return {
             ad_id: adId,
             error: err.message,
-          });
+          };
         }
-      }));
+      };
+    });
 
-      // Add delay between batches to avoid rate limits
-      if (i + batchSize < adIds.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
-    }
-
-    return previews;
+    return await this.processWithQueue(tasks, concurrency, delayBetweenRequests);
   }
 
   async fetchCreativeData(report) {
@@ -346,15 +374,12 @@ class FacebookExecutor {
       throw new Error('creativeIds must be a non-empty array in report');
     }
 
-    const creatives = [];
+    // Process with controlled concurrency (2 at a time) to avoid rate limiting
+    const concurrency = 2;
+    const delayBetweenRequests = 300; // 300ms delay between requests
 
-    // Batch requests
-    const batchSize = 50;
-    
-    for (let i = 0; i < creativeIds.length; i += batchSize) {
-      const batch = creativeIds.slice(i, i + batchSize);
-      
-      await Promise.all(batch.map(async (creativeId) => {
+    const tasks = creativeIds.map((creativeId) => {
+      return async () => {
         try {
           const creative = new AdCreative(creativeId);
           await creative.read([
@@ -370,7 +395,7 @@ class FacebookExecutor {
             'format',
           ]);
           
-          creatives.push({
+          return {
             creative_id: creativeId,
             thumbnail_url: creative.thumbnail_url,
             image_url: creative.image_url,
@@ -381,23 +406,18 @@ class FacebookExecutor {
             call_to_action_type: creative.call_to_action_type,
             format: creative.format,
             object_story_spec: creative.object_story_spec,
-          });
+          };
         } catch (err) {
           console.error(`Error fetching creative ${creativeId}:`, err.message);
-          creatives.push({
+          return {
             creative_id: creativeId,
             error: err.message,
-          });
+          };
         }
-      }));
+      };
+    });
 
-      // Add delay between batches
-      if (i + batchSize < creativeIds.length) {
-        await new Promise(resolve => setTimeout(resolve, 300));
-      }
-    }
-
-    return creatives;
+    return await this.processWithQueue(tasks, concurrency, delayBetweenRequests);
   }
 
   async execute() {

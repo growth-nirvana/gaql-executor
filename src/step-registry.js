@@ -9,6 +9,7 @@ const { shareOfStep } = require("./share-of");
 const { statsStep } = require("./stats");
 const { deriveDimensionStep } = require("./derive-dimension");
 const { actionsToColumnsRows } = require("./fb/actions-to-columns");
+const { loadCustomConversionsStep } = require("./fb/load-custom-conversions-step");
 const { enrichWithConversionActions } = require("./google-ads/conversion-actions-enricher");
 const { topNStep } = require("./top-n");
 const { derive } = require("./derive");
@@ -57,8 +58,12 @@ const STEPS = {
     (rows, cfg, ctx) => attachPeriodsMetaStep(rows, cfg, ctx),
     { phase: "post", changesCardinality: false }
   ),
+  loadCustomConversions: withTraits(
+    async (rows, cfg, ctx) => loadCustomConversionsStep(rows, cfg, ctx),
+    { phase: "pre", changesCardinality: false }
+  ),
   actionsToColumns: withTraits(
-    (rows, cfg) => actionsToColumnsRows(rows, cfg), { phase: "post", changesCardinality: false }
+    (rows, cfg, ctx) => actionsToColumnsRows(rows, cfg, ctx), { phase: "post", changesCardinality: false }
   ),
   conversionActionsEnricher: withTraits(
     async (rows, cfg, ctx) => enrichWithConversionActions(rows, cfg, ctx), 

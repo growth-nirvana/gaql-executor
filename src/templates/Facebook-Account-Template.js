@@ -1,5 +1,6 @@
 const { BaseTemplate } = require('./BaseTemplate');
 const { normalizeActionList } = require('../fb/action-utils');
+const { DEFAULT_FIELDS: CUSTOM_CONVERSION_FIELDS } = require('../fb/custom-conversions');
 
 class FacebookAccountTemplate extends BaseTemplate {
   static getBaseReport() {
@@ -96,13 +97,23 @@ class FacebookAccountTemplate extends BaseTemplate {
 
     const filterConfig = this.calculateFilters(config);
 
+    const loadCustomConversionsStep = config.loadCustomConversions === false ? [] : [{
+      use: 'loadCustomConversions',
+      fields: config.customConversionFields || CUSTOM_CONVERSION_FIELDS,
+      cacheTtlMs: config.customConversionCacheTtlMs,
+      limit: config.customConversionLimit,
+      maxPages: config.customConversionMaxPages,
+    }];
+
     const pipeline = [
       {
         use: 'periods',
         baseline: { mode: config.periodsBaselineMode || 'previous_period' },
       },
+      ...loadCustomConversionsStep,
       {
         use: 'actionsToColumns',
+        debug: config.debugCustomConversions !== false,
         sources: [
           {
             from: 'metrics.actions',
@@ -219,6 +230,8 @@ class FacebookAccountTemplate extends BaseTemplate {
           'metrics_prev.reach',
           'metrics_prev.conversions',
           'metrics_prev.conversions_value',
+          'metrics.actions_by_type.*',
+          'metrics.action_values_by_type.*',
         ],
         ratios: [
           { as: 'metrics.ctr', num: 'metrics.clicks', den: 'metrics.impressions' },

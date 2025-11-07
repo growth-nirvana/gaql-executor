@@ -1,5 +1,6 @@
 const { BaseTemplate } = require('./BaseTemplate');
 const { normalizeActionList } = require('../fb/action-utils');
+const { DEFAULT_FIELDS: CUSTOM_CONVERSION_FIELDS } = require('../fb/custom-conversions');
 
 class FacebookAdSetTemplate extends BaseTemplate {
   
@@ -305,13 +306,23 @@ class FacebookAdSetTemplate extends BaseTemplate {
       });
     }
 
+    const loadCustomConversionsStep = config.loadCustomConversions === false ? [] : [{
+      use: "loadCustomConversions",
+      fields: config.customConversionFields || CUSTOM_CONVERSION_FIELDS,
+      cacheTtlMs: config.customConversionCacheTtlMs,
+      limit: config.customConversionLimit,
+      maxPages: config.customConversionMaxPages,
+    }];
+
     return new FacebookAdSetTemplate({
       credentials,
       report,
       pipeline: [
         { use: "periods", baseline: { mode: config.periodsBaselineMode || "previous_period" } },
+        ...loadCustomConversionsStep,
         { 
           use: 'actionsToColumns',
+          debug: config.debugCustomConversions !== false,
           sources: [
             { from: 'metrics.actions', to: 'metrics.actions_by_type', totalAs: '_total', keepRaw: true },
             { from: 'metrics.action_values', to: 'metrics.action_values_by_type', totalAs: '_total_value', keepRaw: true },

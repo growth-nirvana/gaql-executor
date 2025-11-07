@@ -48,7 +48,7 @@ function sanitizeKey(s) {
  *   ]
  * }
  */
-function actionsToColumnsRows(rows, cfg = {}) {
+function actionsToColumnsRows(rows, cfg = {}, ctx = {}) {
   const sources = Array.isArray(cfg.sources) && cfg.sources.length
     ? cfg.sources
     : [{
@@ -58,6 +58,13 @@ function actionsToColumnsRows(rows, cfg = {}) {
         map: cfg.map || {},
         keepRaw: !!cfg.keepRaw,
       }];
+
+  const customMap = ctx?.state?.customConversionTypeMap || null;
+  const debug = cfg.debug === true || (cfg.debug === undefined && process.env.DEBUG_CUSTOM_CONVERSIONS === "1");
+  let debugLoggedMissingActionValues = false;
+  let debugLoggedRawActionValues = false;
+  let debugLoggedTotals = false;
+  let debugLoggedActionTotals = false;
 
   // Build reverse map for quick canonicalization
   function buildReverse(map) {
@@ -76,8 +83,24 @@ function actionsToColumnsRows(rows, cfg = {}) {
       const { from, to, totalAs = "_total", map = {}, keepRaw = false } = src;
       const rev = buildReverse(map);
       const arr = getAtPath(out, from);
+      const isActionValuesSource = typeof from === "string" && from.includes("action_values");
 
-      if (!Array.isArray(arr)) continue;
+      if (!Array.isArray(arr)) {
+        if (debug && isActionValuesSource && !debugLoggedMissingActionValues) {
+          console.info("[actionsToColumns] action_values source missing or not array", {
+            from,
+            hasValue: arr != null,
+            type: arr == null ? "undefined" : typeof arr,
+          });
+          debugLoggedMissingActionValues = true;
+        }
+        continue;
+      }
+
+      if (debug && isActionValuesSource && !debugLoggedRawActionValues) {
+        console.info("[actionsToColumns] raw action_values sample", arr.slice(0, 5));
+        debugLoggedRawActionValues = true;
+      }
 
       // Sum by action_type
       const totals = Object.create(null);
@@ -90,7 +113,7 @@ function actionsToColumnsRows(rows, cfg = {}) {
         const val = Number(valRaw);
         if (!Number.isFinite(val)) continue;
 
-        const canon = rev.get(rawType.toLowerCase()) || sanitizeKey(rawType);
+        const canon = resolveCanonicalAction(rawType, rev, customMap);
         totals[canon] = (totals[canon] || 0) + val;
         grand += val;
       }
@@ -103,6 +126,26 @@ function actionsToColumnsRows(rows, cfg = {}) {
         setAtPath(out, `${to}.${totalAs}`, grand);
       }
 
+      if (debug) {
+        if (isActionValuesSource && !debugLoggedTotals) {
+          console.info("[actionsToColumns] aggregated action values", {
+            to,
+            keys: Object.keys(totals),
+            grand,
+          });
+          debugLoggedTotals = true;
+        }
+
+        if (!isActionValuesSource && !debugLoggedActionTotals) {
+          console.info("[actionsToColumns] aggregated actions", {
+            to,
+            keys: Object.keys(totals),
+            grand,
+          });
+          debugLoggedActionTotals = true;
+        }
+      }
+
       if (!keepRaw) {
         // Optionally remove the original array to keep rows clean
         setAtPath(out, from, undefined);
@@ -111,6 +154,33 @@ function actionsToColumnsRows(rows, cfg = {}) {
 
     return out;
   });
+}
+
+function resolveCanonicalAction(rawType, reverseMap, customConversionMap) {
+  const lower = rawType.toLowerCase();
+
+  if (reverseMap.has(lower)) {
+    return sanitizeKey(reverseMap.get(lower));
+  }
+
+  if (customConversionMap) {
+    const mapped =
+      customConversionMap[lower] ||
+      customConversionMap[rawType] ||
+      customConversionMap[stripNonDigits(rawType)] ||
+      null;
+    if (mapped) {
+      return sanitizeKey(mapped);
+    }
+  }
+
+  return sanitizeKey(rawType);
+}
+
+function stripNonDigits(value) {
+  if (value == null) return "";
+  const digits = String(value).match(/\d+/g);
+  return digits ? digits.join("") : String(value);
 }
 
 module.exports = { actionsToColumnsRows };

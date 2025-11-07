@@ -1,5 +1,6 @@
 const { BaseTemplate } = require('./BaseTemplate');
 const { normalizeActionList } = require('../fb/action-utils');
+const { DEFAULT_FIELDS: CUSTOM_CONVERSION_FIELDS } = require('../fb/custom-conversions');
 
 class FacebookCampaignTemplate extends BaseTemplate {
   
@@ -303,13 +304,23 @@ class FacebookCampaignTemplate extends BaseTemplate {
       });
     }
 
+    const loadCustomConversionsStep = config.loadCustomConversions === false ? [] : [{
+      use: "loadCustomConversions",
+      fields: config.customConversionFields || CUSTOM_CONVERSION_FIELDS,
+      cacheTtlMs: config.customConversionCacheTtlMs,
+      limit: config.customConversionLimit,
+      maxPages: config.customConversionMaxPages,
+    }];
+
     return new FacebookCampaignTemplate({
       credentials,
       report,
       pipeline: [
         { use: "periods", baseline: { mode: config.periodsBaselineMode || "previous_period" } },
+        ...loadCustomConversionsStep,
         { 
           use: 'actionsToColumns',
+          debug: config.debugCustomConversions !== false,
           sources: [
             { from: 'metrics.actions', to: 'metrics.actions_by_type', totalAs: '_total', keepRaw: true },
             { from: 'metrics.action_values', to: 'metrics.action_values_by_type', totalAs: '_total_value', keepRaw: true },
@@ -676,7 +687,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
             "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
-        // { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
+        { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",

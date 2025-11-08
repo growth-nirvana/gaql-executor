@@ -28,6 +28,7 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
     const cached = ctx.cache.get(cacheKey);
     if (cached && (!cached.expiresAt || cached.expiresAt > now)) {
       ctx.state.customConversionTypeMap = cached.map;
+      ctx.state.customConversionLabelMap = cached.labels || {};
       return rows;
     }
   }
@@ -72,11 +73,24 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
 
   const map = buildCustomConversionMap(conversions);
 
+  const labels = {};
+  for (const conversion of conversions) {
+    if (!conversion || !conversion.id) continue;
+    const id = String(conversion.id);
+    const canonical = map[id] || map[id.toLowerCase()];
+    const label = conversion.name || id;
+    if (canonical) {
+      labels[canonical] = label;
+    }
+  }
+
   ctx.state.customConversionTypeMap = map;
+  ctx.state.customConversionLabelMap = labels;
 
   if (ctx.cache) {
     ctx.cache.set(cacheKey, {
       map,
+      labels,
       expiresAt: now + (cfg.cacheTtlMs || DEFAULT_CACHE_TTL_MS),
     });
   }

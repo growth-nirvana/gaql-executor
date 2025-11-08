@@ -364,6 +364,7 @@ class FacebookAdTemplate extends BaseTemplate {
           orderBy: [{ field: "ad.name", dir: "ASC" }],
         },
         ...(config.filters ? [{ use: "filter", ...config.filters }] : []),
+        { use: "applyActionLabels" },
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",

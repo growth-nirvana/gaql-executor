@@ -183,6 +183,7 @@ class FacebookAccountTemplate extends BaseTemplate {
         orderBy: [{ field: 'account.name', dir: 'ASC', nulls: 'last' }],
       },
       ...(filterConfig ? [{ use: 'filter', ...filterConfig }] : []),
+      { use: 'applyActionLabels' },
       { use: 'shareOf', fields: ['metrics.cost'], includeRollup: false },
       {
         use: 'delta',

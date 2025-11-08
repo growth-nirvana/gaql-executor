@@ -10,6 +10,7 @@ const { statsStep } = require("./stats");
 const { deriveDimensionStep } = require("./derive-dimension");
 const { actionsToColumnsRows } = require("./fb/actions-to-columns");
 const { loadCustomConversionsStep } = require("./fb/load-custom-conversions-step");
+const { applyActionLabelsStep } = require("./fb/apply-action-labels-step");
 const { enrichWithConversionActions } = require("./google-ads/conversion-actions-enricher");
 const { topNStep } = require("./top-n");
 const { derive } = require("./derive");
@@ -61,6 +62,10 @@ const STEPS = {
   loadCustomConversions: withTraits(
     async (rows, cfg, ctx) => loadCustomConversionsStep(rows, cfg, ctx),
     { phase: "pre", changesCardinality: false }
+  ),
+  applyActionLabels: withTraits(
+    (rows, cfg, ctx) => applyActionLabelsStep(rows, cfg, ctx),
+    { phase: "post", changesCardinality: false }
   ),
   actionsToColumns: withTraits(
     (rows, cfg, ctx) => actionsToColumnsRows(rows, cfg, ctx), { phase: "post", changesCardinality: false }

@@ -357,6 +357,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
           orderBy: [{ field: "campaign.name", dir: "ASC" }],
         },
         ...(config.filters ? [{ use: "filter", ...config.filters }] : []),
+        { use: "applyActionLabels" },
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",

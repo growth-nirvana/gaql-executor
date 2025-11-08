@@ -697,7 +697,7 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
-        // { use: "pruneRows", mode: "empty", as: "rows_meta" }
+        { use: "pruneRows", mode: "empty", as: "rows_meta" }
       ],
       output: {
         mode: "envelope",

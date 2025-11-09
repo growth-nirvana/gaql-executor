@@ -142,11 +142,55 @@ const RAW_ACTION_LABELS = {
   "cancel_subscription": "Canceled Subscriptions",
 };
 
+const CHANNEL_RULES = [
+  {
+    match: (raw) => raw.startsWith("offsite_conversion.fb_pixel"),
+    suffix: " — Web (Pixel/CAPI)",
+  },
+  {
+    match: (raw) => raw.startsWith("onsite_conversion."),
+    suffix: " — On-Facebook",
+  },
+  {
+    match: (raw) => raw.startsWith("omni_"),
+    suffix: " — Omni (Grouped)",
+  },
+  {
+    match: (raw) =>
+      raw.startsWith("app_custom_event.fb_mobile") ||
+      raw.startsWith("mobile_app") ||
+      raw.startsWith("app_") ||
+      raw.endsWith("_mobile_app"),
+    suffix: " — Mobile App",
+  },
+  {
+    match: (raw) => raw.endsWith("_website"),
+    suffix: " — Website",
+  },
+  {
+    match: (raw) => raw.endsWith("_offline"),
+    suffix: " — Offline",
+  },
+  {
+    match: (raw) => raw.endsWith("_on_facebook"),
+    suffix: " — On-Facebook",
+  },
+];
+
+function applyChannelSuffix(raw, label) {
+  for (const rule of CHANNEL_RULES) {
+    if (rule.match(raw)) {
+      return `${label}${rule.suffix}`;
+    }
+  }
+  return label;
+}
+
 function buildCanonicalMap(rawLabels) {
   const map = {};
   for (const [raw, label] of Object.entries(rawLabels)) {
     const canon = sanitizeKey(raw);
-    map[canon] = label;
+    map[canon] = applyChannelSuffix(raw, label);
   }
   return map;
 }

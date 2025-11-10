@@ -49,6 +49,8 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
       to_date: toDate,
     };
 
+    const filterConfig = this.calculateFilters(config);
+
     return new this({
       credentials,
       report,
@@ -80,7 +82,7 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
           orderBy: [{ field: "campaign.name", dir: "ASC" }],
         },
         // Add filter step if filters are configured
-        ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
+        ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",

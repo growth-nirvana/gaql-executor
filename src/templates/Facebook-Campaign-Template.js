@@ -312,6 +312,8 @@ class FacebookCampaignTemplate extends BaseTemplate {
       maxPages: config.customConversionMaxPages,
     }];
 
+    const filterConfig = this.calculateFilters(config);
+
     return new FacebookCampaignTemplate({
       credentials,
       report,
@@ -356,7 +358,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
           nulls: "include",
           orderBy: [{ field: "campaign.name", dir: "ASC" }],
         },
-        ...(config.filters ? [{ use: "filter", ...config.filters }] : []),
+        ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
         { use: "applyActionLabels" },
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {

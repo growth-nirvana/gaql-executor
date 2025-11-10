@@ -319,6 +319,8 @@ class FacebookAdTemplate extends BaseTemplate {
       maxPages: config.customConversionMaxPages,
     }];
 
+    const filterConfig = this.calculateFilters(config);
+
     return new FacebookAdTemplate({
       credentials,
       report,
@@ -363,7 +365,7 @@ class FacebookAdTemplate extends BaseTemplate {
           nulls: "include",
           orderBy: [{ field: "ad.name", dir: "ASC" }],
         },
-        ...(config.filters ? [{ use: "filter", ...config.filters }] : []),
+        ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
         { use: "applyActionLabels" },
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {

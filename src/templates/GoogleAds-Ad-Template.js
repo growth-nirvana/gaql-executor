@@ -40,6 +40,8 @@ class GoogleAdsAdTemplate extends BaseTemplate {
       to_date: toDate,
     };
 
+    const filterConfig = this.calculateFilters(config);
+
     return new this({
       credentials,
       report,
@@ -70,7 +72,7 @@ class GoogleAdsAdTemplate extends BaseTemplate {
           nulls: "include",
           orderBy: [{ field: "campaign.name", dir: "ASC" }],
         },
-        ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
+        ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",

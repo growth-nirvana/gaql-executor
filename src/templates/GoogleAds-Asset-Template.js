@@ -56,6 +56,8 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
       to_date: toDate,
     };
 
+    const filterConfig = this.calculateFilters(config);
+
     return new this({
       credentials,
       report,
@@ -87,7 +89,7 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
           nulls: "include",
           orderBy: [{ field: "metrics.cost", dir: "DESC" }],
         },
-        ...(this.calculateFilters(config) ? [{ use: "filter", ...this.calculateFilters(config) }] : []),
+        ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
         {
           use: "stats",

@@ -49,10 +49,28 @@ class BaseTemplate {
     if (!config.filters || !Array.isArray(config.filters) || config.filters.length === 0) {
       return null;
     }
-    
+
+    const where = config.filters
+      .filter((f) => f)
+      .map((f) => {
+        const { field, op, value, flags } = f;
+        if (typeof field !== "string" || !field.length) return null;
+        const operator = typeof op === "string" ? op.toUpperCase() : "=";
+
+        return {
+          field,
+          op: operator,
+          value,
+          flags,
+        };
+      })
+      .filter(Boolean);
+
+    if (where.length === 0) return null;
+
     return {
-      where: config.filters,
-      logic: config.filterLogic || "AND"
+      where,
+      logic: config.filterLogic || "AND",
     };
   }
 

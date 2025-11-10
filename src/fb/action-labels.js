@@ -197,6 +197,12 @@ function buildCanonicalMap(rawLabels) {
 
 const ACTION_LABELS = buildCanonicalMap(RAW_ACTION_LABELS);
 
+const LABEL_INDEX = Object.entries(ACTION_LABELS).reduce((acc, [canonical, label]) => {
+  const sanitizedLabel = sanitizeKey(label);
+  if (sanitizedLabel) acc[sanitizedLabel] = canonical;
+  return acc;
+}, {});
+
 function toTitleCase(str) {
   return String(str || "")
     .replace(/_/g, " ")
@@ -221,9 +227,21 @@ function getActionLabel(canonicalKey, ctx) {
   return toTitleCase(canonicalKey);
 }
 
+function resolveActionKey(input) {
+  const sanitized = sanitizeKey(input);
+  if (!sanitized) return null;
+
+  if (ACTION_LABELS[sanitized]) return sanitized;
+
+  if (LABEL_INDEX[sanitized]) return LABEL_INDEX[sanitized];
+
+  return sanitized;
+}
+
 module.exports = {
   ACTION_LABELS,
   getActionLabel,
   toTitleCase,
+  resolveActionKey,
 };
 

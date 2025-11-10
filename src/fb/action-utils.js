@@ -8,15 +8,18 @@ function sanitizeActionKey(action) {
     .replace(/^_+|_+$/g, "");
 }
 
+const { resolveActionKey } = require("./action-labels");
+
 function normalizeActionList(rawValue, fallbackValue = "_total") {
   const source = rawValue !== undefined ? rawValue : fallbackValue;
   const arr = Array.isArray(source) ? source : [source];
   const normalised = arr
+    .map((action) => resolveActionKey(action))
     .map((action) => sanitizeActionKey(action))
     .filter((action) => typeof action === "string" && action.length > 0);
 
   if (normalised.length === 0 && fallbackValue !== undefined) {
-    const fallback = sanitizeActionKey(fallbackValue);
+    const fallback = sanitizeActionKey(resolveActionKey(fallbackValue));
     if (fallback) normalised.push(fallback);
   }
 

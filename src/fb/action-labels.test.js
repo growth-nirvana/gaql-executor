@@ -1,4 +1,5 @@
-const { getActionLabel } = require('./action-labels');
+const { getActionLabel, resolveActionKey } = require('./action-labels');
+const { normalizeActionList } = require('./action-utils');
 
 describe('Facebook action label mapping', () => {
   it('labels pixel purchases as web (Pixel/CAPI)', () => {
@@ -19,6 +20,16 @@ describe('Facebook action label mapping', () => {
   it('labels omni purchases as grouped', () => {
     const label = getActionLabel('omni_purchase');
     expect(label).toBe('Purchases — Omni (Grouped)');
+  });
+
+  it('resolves label back to canonical action key', () => {
+    const key = resolveActionKey('Leads — Web (Pixel/CAPI)');
+    expect(key).toBe('offsite_conversion_fb_pixel_lead');
+  });
+
+  it('normalizes human label to canonical action key', () => {
+    const actions = normalizeActionList('Leads — Web (Pixel/CAPI)');
+    expect(actions).toEqual(['offsite_conversion_fb_pixel_lead']);
   });
 });
 

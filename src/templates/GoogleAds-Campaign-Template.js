@@ -671,6 +671,52 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
       }
     });
   }
+
+  static forDimension(credentials, fromDate, toDate, config = {}) {
+    const baseReport = this.getBaseReport();
+    const report = {
+      ...baseReport,
+      metrics: [],
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      segments: config.segments !== undefined ? config.segments : (baseReport.segments || []),
+    };
+
+    const pipeline = [{ use: "statusesReadable" }];
+
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    pipeline.push({
+      use: "group",
+      by: [
+        ...this.calculateGroupByAttributes(config),
+      ],
+      aggregates: {},
+      rollup: false,
+      nulls: "include",
+      orderBy: config.orderBy || [{ field: "campaign.name", dir: "ASC" }],
+    });
+
+    const filterConfig = this.calculateFilters(config);
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "flat",
+      },
+    });
+  }
 }
 
 module.exports = { GoogleAdsCampaignTemplate };

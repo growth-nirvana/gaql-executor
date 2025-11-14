@@ -70,7 +70,7 @@ class GoogleAdsAdTemplate extends BaseTemplate {
           },
           rollup: true,
           nulls: "include",
-          orderBy: [{ field: "campaign.name", dir: "ASC" }],
+          orderBy: config.orderBy || [{ field: "campaign.name", dir: "ASC" }],
         },
         ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
         { use: "shareOf", fields: ["metrics.cost"], includeRollup: false, },
@@ -589,7 +589,7 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             // "meta": (s) => (delete s._util, s.meta) // optional
           }
         },
-        // { use: "pruneRows", when: { maxRows: 50 }, mode: "empty", as: "rows_meta" }
+        ...(config.pruneRows !== false ? [{ use: "pruneRows", mode: "empty", as: "rows_meta" }] : [])
       ],
       output: {
         mode: "envelope",

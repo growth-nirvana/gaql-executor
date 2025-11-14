@@ -363,7 +363,7 @@ class FacebookAdTemplate extends BaseTemplate {
           },
           rollup: true,
           nulls: "include",
-          orderBy: [{ field: "ad.name", dir: "ASC" }],
+          orderBy: config.orderBy || [{ field: "ad.name", dir: "ASC" }],
         },
         ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
         { use: "applyActionLabels" },
@@ -699,11 +699,65 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_delta_pct.roas": (s) => s._util?.safe.pct(s.metrics?.roas, s.metrics_prev?.roas),
           }
         },
-        { use: "pruneRows", mode: "empty", as: "rows_meta" }
+        ...(config.pruneRows !== false ? [{ use: "pruneRows", mode: "empty", as: "rows_meta" }] : [])
       ],
       output: {
         mode: "envelope",
         include: ["periods"],
+      }
+    });
+  }
+
+  static forDimension(credentials, fromDate, toDate, config = {}) {
+    const baseReport = this.getBaseAdReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      segments: config.segments !== undefined ? config.segments : (baseReport.segments || []),
+    };
+
+    // Simplified pipeline - similar to change event template
+    // No metrics, just grouping for dimensions
+    const pipeline = [
+      { use: "statusesReadable" },
+    ];
+
+    // Add derived dimension steps if configured (before grouping)
+    // This allows creating new dimensions from existing attributes
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    // Group by selected attributes (no aggregates - just dimension values)
+    pipeline.push({ 
+      use: "group", 
+      by: [
+        ...this.calculateGroupByAttributes(config),
+      ],
+      aggregates: {}, // No metrics - just grouping for dimensions
+      rollup: false,
+      nulls: "include",
+      // Default ordering by ad name
+      orderBy: config.orderBy || [{ field: "ad.name", dir: "ASC" }],
+    });
+
+    // Add filter step if filters are configured
+    const filterConfig = this.calculateFilters(config);
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "flat", // Flat output - just the results array
       }
     });
   }

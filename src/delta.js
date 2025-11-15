@@ -204,13 +204,34 @@ async function deltaAugment(rows, cfg = {}, ctx) {
   }
 
   function synthesizeCurrentRowFrom(prevRow) {
-    const stub = {};
-    // copy grouping keys so the row is identifiable/reportable
-    for (const k of keys) setAtPath(stub, k, getAtPath(prevRow, k));
-    // initialize absolute bases to zero; ratios will compute to null
+    // Deep copy all fields from previous row to preserve all dimensions (not just keys)
+    const stub = prevRow ? JSON.parse(JSON.stringify(prevRow)) : {};
+    
+    // Build a set of metric field paths to zero out
+    const metricFields = new Set();
     for (const m of measures) {
-      if (m.kind === "absolute") setAtPath(stub, m.field, 0);
+      if (m.kind === "absolute") {
+        metricFields.add(m.field);
+      }
+      // For ratios, zero out the numerator and denominator fields
+      if (m.kind === "ratio") {
+        metricFields.add(m.num);
+        metricFields.add(m.den);
+      }
     }
+    
+    // Zero out all metric fields (absolute measures and ratio components)
+    for (const field of metricFields) {
+      setAtPath(stub, field, 0);
+    }
+    
+    // Also zero out any ratio metrics that were computed in previous period
+    for (const m of measures) {
+      if (m.kind === "ratio") {
+        setAtPath(stub, m.field, null); // Ratios become null when denominator is 0
+      }
+    }
+    
     return stub;
   }
 

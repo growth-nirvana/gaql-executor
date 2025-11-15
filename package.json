@@ -1,6 +1,6 @@
 {
   "name": "@growth-nirvana/gaql-executor",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Composable GAQL executor + pipeline steps for the Google Ads API",
   "license": "MIT",
   "author": "Growth Nirvana",

@@ -6,6 +6,14 @@ const { FacebookAdsApi, AdAccount } = bizSdk;
 
 class FacebookExecutor {
   constructor(options = {}) {
+    // Normalize accountIds to always be an array (similar to Google Ads customerIds)
+    let accountIds = [];
+    if (options.credentials?.accountIds && Array.isArray(options.credentials.accountIds)) {
+      accountIds = options.credentials.accountIds;
+    } else if (options.credentials?.accountId) {
+      accountIds = [options.credentials.accountId];
+    }
+
     // For standard reports, extract specific fields
     // For custom reports (like creative_preview), preserve all fields
     const report = options.report || {};
@@ -28,7 +36,7 @@ class FacebookExecutor {
           },
       credentials: {
         accessToken: options.credentials?.accessToken,
-        accountId: options.credentials?.accountId, // e.g. 1234567890 (we'll prefix act_)
+        accountIds: accountIds, // Always an array
         appId: options.credentials?.appId,
         appSecret: options.credentials?.appSecret,
       },
@@ -154,10 +162,69 @@ class FacebookExecutor {
     return ctx;
   }
 
-  async fetchInsights(report) {
+  /**
+   * Build context for multi-account execution
+   * Provides fetch() that queries ALL accounts and combines results
+   */
+  buildContextMultiAccount(accountInstances) {
+    const pipeline = Array.isArray(this.options.pipeline) ? this.options.pipeline : [];
+    const baseReport = this.clone(this.options.report);
+
+    const state = Object.create(null);
+    const cache = new Map();
+    
+    const runWithSteps = async (rows, steps) => {
+      let out = rows;
+      for (const step of steps || []) {
+        const fn = step && step.use && STEPS[step.use];
+        if (typeof fn === "function") out = await fn(out, step, ctx);
+      }
+      return out;
+    };
+
+    const ctx = {
+      options: this.options,
+      state,
+      cache,
+      runPre: async (rows) => {
+        const pre = state.preStepsExecuted || [];
+        return runWithSteps(rows, pre);
+      },
+      // Fetch from ALL accounts and combine
+      fetch: async (overrides = {}, tag = "default") => {
+        // Fetch from ALL accounts
+        const allRows = [];
+        for (const accountInstance of accountInstances) {
+          const finalReport = this.overrideReportOptions(baseReport, overrides);
+          const { rows } = await this.fetchInsightsForAccount(finalReport, accountInstance.accountId);
+          allRows.push(...rows);
+        }
+        return allRows;
+      },
+      runWithSteps,
+    };
+
+    ctx._freezePre = (executedPre) => { state.preStepsExecuted = executedPre.slice(); };
+
+    return ctx;
+  }
+
+  clone(x) { return x == null ? x : JSON.parse(JSON.stringify(x)); }
+
+  overrideReportOptions(base, overrides = {}) {
+    const result = this.clone(base) || {};
+    // Completely replace specified fields instead of merging
+    for (const [key, value] of Object.entries(overrides)) {
+      if (value !== undefined) {
+        result[key] = value;
+      }
+    }
+    return result;
+  }
+
+  async fetchInsightsForAccount(report, accountId) {
     this.initializeClient();
 
-    const accountId = this.options.credentials.accountId;
     if (!accountId) throw new Error("Meta accountId is required (e.g. 1234567890)");
     const account = new AdAccount(`act_${accountId}`);
 
@@ -238,6 +305,15 @@ class FacebookExecutor {
 
     const rows = raw.map((row) => shapeRow(row, report));
     return { rows, raw, level, params };
+  }
+
+  async fetchInsights(report) {
+    // Legacy method for backward compatibility - uses first accountId
+    const accountIds = this.options.credentials.accountIds;
+    if (!accountIds || accountIds.length === 0) {
+      throw new Error("Meta accountId is required (e.g. 1234567890)");
+    }
+    return this.fetchInsightsForAccount(report, accountIds[0]);
   }
 
   /**
@@ -423,6 +499,11 @@ class FacebookExecutor {
   async execute() {
     try {
       const { report } = this.options;
+      const { accountIds } = this.options.credentials;
+      
+      if (!accountIds || accountIds.length === 0) {
+        throw new Error('At least one account ID is required');
+      }
       
       // Check if this is a creative preview request
       if (report && report.entity === 'creative_preview') {
@@ -456,20 +537,91 @@ class FacebookExecutor {
         return creatives;
       }
 
-      // Standard insights request
-      const { rows } = await this.fetchInsights(this.options.report);
-      const ctx = this.buildContext();
-      const processed = await this.runPipeline(rows, ctx);
+      // Standard insights request - support multiple accounts
+      if (accountIds.length === 1) {
+        // Single account - use simple path for backward compatibility
+        const { rows } = await this.fetchInsightsForAccount(this.options.report, accountIds[0]);
+        const ctx = this.buildContext();
+        const processed = await this.runPipeline(rows, ctx);
 
-      const { output } = this.options || {};
-      if (output && output.mode === "envelope") {
-        const meta = this.collectMeta(ctx, output);
-        return { 
-          meta, 
-          results: processed
+        const { output } = this.options || {};
+        if (output && output.mode === "envelope") {
+          const meta = this.collectMeta(ctx, output);
+          return { 
+            meta, 
+            results: processed
+          };
+        }
+        return processed;
+      } else {
+        // Multiple accounts - fetch from all and combine
+        const allRows = [];
+        const accountInstances = [];
+        const accountResults = {
+          succeeded: [],
+          failed: []
         };
+
+        for (const accountId of accountIds) {
+          try {
+            const { rows } = await this.fetchInsightsForAccount(this.options.report, accountId);
+            allRows.push(...rows);
+            accountInstances.push({ accountId });
+            accountResults.succeeded.push({
+              accountId,
+              rowCount: rows.length
+            });
+          } catch (err) {
+            const errorMsg = err?.message || String(err);
+            console.error(`Failed to fetch insights for account ${accountId}: ${errorMsg}`);
+            accountResults.failed.push({
+              accountId,
+              error: errorMsg
+            });
+          }
+        }
+
+        // Check if we have any successful accounts
+        if (accountResults.succeeded.length === 0) {
+          throw new Error(`All accounts failed. Failed accounts: ${accountResults.failed.map(f => f.accountId).join(', ')}`);
+        }
+
+        // Log summary to stderr so it doesn't pollute JSON output
+        console.error(`Account processing summary:`);
+        console.error(`- Succeeded: ${accountResults.succeeded.length} accounts`);
+        console.error(`- Failed: ${accountResults.failed.length} accounts`);
+        if (accountResults.succeeded.length > 0) {
+          console.error(`- Successful accounts: ${accountResults.succeeded.map(s => s.accountId).join(', ')}`);
+        }
+        if (accountResults.failed.length > 0) {
+          console.error(`- Failed accounts: ${accountResults.failed.map(f => f.accountId).join(', ')}`);
+        }
+
+        // Build context with access to ALL accounts
+        const ctx = this.buildContextMultiAccount(accountInstances);
+
+        // Run pipeline ONCE on combined data
+        const processed = await this.runPipeline(allRows, ctx);
+
+        const { output } = this.options || {};
+        if (output && output.mode === "envelope") {
+          const meta = this.collectMeta(ctx, output);
+          return { 
+            meta, 
+            results: processed,
+            accountResults: {
+              succeeded: accountResults.succeeded,
+              failed: accountResults.failed,
+              summary: {
+                total: accountIds.length,
+                succeeded: accountResults.succeeded.length,
+                failed: accountResults.failed.length
+              }
+            }
+          };
+        }
+        return processed;
       }
-      return processed;
     } catch (err) {
       console.error("Meta Executor error:", err && err.stack || err);
       throw err;

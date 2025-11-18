@@ -15,13 +15,17 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
   }
 
   const { credentials = {} } = ctx.options || {};
-  const { accessToken, accountId } = credentials;
+  const { accessToken, accountIds, accountId } = credentials;
+  
+  // Support both accountIds array and accountId single value
+  // For multi-account, use first accountId for custom conversions (account-specific)
+  const targetAccountId = (accountIds && accountIds.length > 0) ? accountIds[0] : accountId;
 
-  if (!accessToken || !accountId) {
+  if (!accessToken || !targetAccountId) {
     return rows;
   }
 
-  const cacheKey = `customConversions:${accountId}`;
+  const cacheKey = `customConversions:${targetAccountId}`;
   const now = Date.now();
 
   if (ctx.cache && ctx.cache.has(cacheKey)) {
@@ -37,7 +41,7 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
 
   if (cfg.log !== false) {
     console.info("[loadCustomConversions] fetching custom conversions", {
-      accountId,
+      accountId: targetAccountId,
       fields,
       limit: cfg.limit,
       maxPages: cfg.maxPages,
@@ -46,7 +50,7 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
 
   const conversions = await fetchCustomConversions({
     accessToken,
-    accountId,
+    accountId: targetAccountId,
     fields,
     limit: cfg.limit,
     maxPages: cfg.maxPages,
@@ -55,7 +59,7 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
   if (cfg.log !== false) {
     const count = Array.isArray(conversions) ? conversions.length : 0;
     console.info("[loadCustomConversions] fetched custom conversions", {
-      accountId,
+      accountId: targetAccountId,
       count,
     });
     if (count) {

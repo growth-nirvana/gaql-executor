@@ -40,6 +40,8 @@ const METRIC_FIELDS = {
 
   "metrics.actions": "actions",
   "metrics.action_values": "action_values",
+  "metrics.conversions_api": "conversions",  // API conversions field (stringified JSON) - different from calculated metrics.conversions
+  "metrics.conversion_values_api": "conversion_values",  // API conversion_values field (stringified JSON) - different from calculated metrics.conversions_value
   "metrics.cost_per_action_type": "cost_per_action_type",
 };
 

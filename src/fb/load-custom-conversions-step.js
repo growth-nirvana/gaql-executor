@@ -15,11 +15,11 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
   }
 
   const { credentials = {} } = ctx.options || {};
-  const { accessToken, accountIds, accountId } = credentials;
+  const { accessToken, accountIds } = credentials;
   
-  // Support both accountIds array and accountId single value
+  // accountIds is always an array (normalized in executor constructor)
   // For multi-account, use first accountId for custom conversions (account-specific)
-  const targetAccountId = (accountIds && accountIds.length > 0) ? accountIds[0] : accountId;
+  const targetAccountId = (accountIds && accountIds.length > 0) ? accountIds[0] : null;
 
   if (!accessToken || !targetAccountId) {
     return rows;
@@ -39,15 +39,6 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
 
   const fields = Array.isArray(cfg.fields) && cfg.fields.length ? cfg.fields : DEFAULT_FIELDS;
 
-  if (cfg.log !== false) {
-    console.info("[loadCustomConversions] fetching custom conversions", {
-      accountId: targetAccountId,
-      fields,
-      limit: cfg.limit,
-      maxPages: cfg.maxPages,
-    });
-  }
-
   const conversions = await fetchCustomConversions({
     accessToken,
     accountId: targetAccountId,
@@ -55,25 +46,6 @@ async function loadCustomConversionsStep(rows, cfg = {}, ctx = {}) {
     limit: cfg.limit,
     maxPages: cfg.maxPages,
   });
-
-  if (cfg.log !== false) {
-    const count = Array.isArray(conversions) ? conversions.length : 0;
-    console.info("[loadCustomConversions] fetched custom conversions", {
-      accountId: targetAccountId,
-      count,
-    });
-    if (count) {
-      console.info(
-        "[loadCustomConversions] sample custom conversions",
-        conversions.slice(0, 5).map((c) => ({
-          id: c?.id,
-          name: c?.name,
-          last_fired_time: c?.last_fired_time,
-          is_unavailable: c?.is_unavailable,
-        }))
-      );
-    }
-  }
 
   const map = buildCustomConversionMap(conversions);
 

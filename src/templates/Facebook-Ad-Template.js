@@ -34,6 +34,8 @@ class FacebookAdTemplate extends BaseTemplate {
         'metrics.frequency',
         'metrics.actions',
         'metrics.action_values',
+        'metrics.conversions_api',  // API conversions field (will be parsed and exploded)
+        'metrics.conversion_values_api',  // API conversion_values field (will be parsed and exploded)
       ],
       segments: [],
       breakdowns: [],
@@ -67,37 +69,69 @@ class FacebookAdTemplate extends BaseTemplate {
     );
     
     // Build aggregates for conversions (sum multiple action types if array provided)
+    // Can include both actions_by_type and conversions_by_type fields
     const conversionAggregates = {};
     if (conversionActions.length === 0 || (conversionActions.length === 1 && conversionActions[0] === "_total")) {
-      // Default: use _total
-      conversionAggregates["metrics.actions._total"] = { fn: "SUM", as: "metrics.conversions" };
-    } else {
-      // Sum specific action types
+      // Default: use _total from both sources
       conversionAggregates["metrics.conversions"] = {
         fn: "SUM_EXPR",
-        sources: conversionActions.map(action => 
-          action === "_total" 
-            ? "metrics.actions._total"
-            : `metrics.actions_by_type.${action}`
-        ).filter(Boolean),
+        sources: [
+          "metrics.actions_by_type._total",
+          "metrics.conversions_by_type._total"
+        ],
+        as: "metrics.conversions"
+      };
+    } else {
+      // Sum specific action types from both actions_by_type and conversions_by_type
+      conversionAggregates["metrics.conversions"] = {
+        fn: "SUM_EXPR",
+        sources: conversionActions.flatMap(action => {
+          if (action === "_total") {
+            return [
+              "metrics.actions_by_type._total",
+              "metrics.conversions_by_type._total"
+            ];
+          }
+          // Try both sources - if field doesn't exist, it will be treated as 0
+          return [
+            `metrics.actions_by_type.${action}`,
+            `metrics.conversions_by_type.${action}`
+          ];
+        }).filter(Boolean),
         as: "metrics.conversions"
       };
     }
     
     // Build aggregates for conversion values
+    // Can include both action_values_by_type and conversion_values_by_type fields
     const conversionValueAggregates = {};
     if (conversionValueActions.length === 0 || (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value")) {
-      // Default: use _total_value
-      conversionValueAggregates["metrics.action_values._total_value"] = { fn: "SUM", as: "metrics.conversions_value" };
-    } else {
-      // Sum specific action value types
+      // Default: use _total_value from both sources
       conversionValueAggregates["metrics.conversions_value"] = {
         fn: "SUM_EXPR",
-        sources: conversionValueActions.map(action => 
-          action === "_total_value"
-            ? "metrics.action_values._total_value"
-            : `metrics.action_values_by_type.${action}`
-        ).filter(Boolean),
+        sources: [
+          "metrics.action_values_by_type._total_value",
+          "metrics.conversion_values_by_type._total_value"
+        ],
+        as: "metrics.conversions_value"
+      };
+    } else {
+      // Sum specific action value types from both action_values_by_type and conversion_values_by_type
+      conversionValueAggregates["metrics.conversions_value"] = {
+        fn: "SUM_EXPR",
+        sources: conversionValueActions.flatMap(action => {
+          if (action === "_total_value") {
+            return [
+              "metrics.action_values_by_type._total_value",
+              "metrics.conversion_values_by_type._total_value"
+            ];
+          }
+          // Try both sources - if field doesn't exist, it will be treated as 0
+          return [
+            `metrics.action_values_by_type.${action}`,
+            `metrics.conversion_values_by_type.${action}`
+          ];
+        }).filter(Boolean),
         as: "metrics.conversions_value"
       };
     }
@@ -333,6 +367,8 @@ class FacebookAdTemplate extends BaseTemplate {
           sources: [
             { from: 'metrics.actions', to: 'metrics.actions_by_type', totalAs: '_total', keepRaw: true },
             { from: 'metrics.action_values', to: 'metrics.action_values_by_type', totalAs: '_total_value', keepRaw: true },
+            { from: 'metrics.conversions_api', to: 'metrics.conversions_by_type', totalAs: '_total', keepRaw: true },
+            { from: 'metrics.conversion_values_api', to: 'metrics.conversion_values_by_type', totalAs: '_total_value', keepRaw: true },
           ]
         },
         { 
@@ -352,6 +388,9 @@ class FacebookAdTemplate extends BaseTemplate {
             // Auto-aggregate all action types dynamically (e.g., purchase, add_to_cart, etc.)
             "metrics.actions_by_type.*": { fn: "SUM" },
             "metrics.action_values_by_type.*": { fn: "SUM" },
+            // Auto-aggregate conversions and conversion_values from API
+            "metrics.conversions_by_type.*": { fn: "SUM" },
+            "metrics.conversion_values_by_type.*": { fn: "SUM" },
             // derived metrics
             "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
             "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
@@ -643,7 +682,10 @@ class FacebookAdTemplate extends BaseTemplate {
             "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value",
             // Auto-sum all action types dynamically
             "metrics.actions_by_type.*",
-            "metrics.action_values_by_type.*"
+            "metrics.action_values_by_type.*",
+            // Auto-sum conversions and conversion_values from API
+            "metrics.conversions_by_type.*",
+            "metrics.conversion_values_by_type.*"
           ],
         
           // 2) Compute ratios from summed bases (never average ratios)

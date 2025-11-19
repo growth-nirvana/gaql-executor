@@ -175,6 +175,20 @@ function shapeRow(row, report) {
     const val = row[field];
     if (val == null) continue;
 
+    // For conversions_api and conversion_values_api fields, handle arrays (coerce numeric strings in "value")
+    if ((path === "metrics.conversions_api" || path === "metrics.conversion_values_api") && Array.isArray(val)) {
+      const arr = val.map((it) => {
+        if (it && typeof it === "object" && "value" in it) {
+          const v = it.value;
+          const n = typeof v === "string" && /^[\d.]+$/.test(v) ? Number(v) : v;
+          return { ...it, value: n };
+        }
+        return it;
+      });
+      setAtPath(out, path, arr);
+      continue;
+    }
+
     // For action arrays, keep as-is but coerce numeric strings in "value"
     if (Array.isArray(val)) {
       const arr = val.map((it) => {

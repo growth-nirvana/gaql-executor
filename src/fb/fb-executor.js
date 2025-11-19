@@ -6,12 +6,20 @@ const { FacebookAdsApi, AdAccount } = bizSdk;
 
 class FacebookExecutor {
   constructor(options = {}) {
-    // Normalize accountIds to always be an array (similar to Google Ads customerIds)
+    // Normalize accountIds to always be an array
+    // Accept both accountIds (array) and accountId (single) for backward compatibility
+    // But always store as accountIds array internally
     let accountIds = [];
     if (options.credentials?.accountIds && Array.isArray(options.credentials.accountIds)) {
       accountIds = options.credentials.accountIds;
     } else if (options.credentials?.accountId) {
+      // Backward compatibility: convert single accountId to array
       accountIds = [options.credentials.accountId];
+    }
+    
+    // Ensure accountIds is always an array (even if empty, which will error later)
+    if (!Array.isArray(accountIds)) {
+      accountIds = [];
     }
 
     // For standard reports, extract specific fields
@@ -225,7 +233,7 @@ class FacebookExecutor {
   async fetchInsightsForAccount(report, accountId) {
     this.initializeClient();
 
-    if (!accountId) throw new Error("Meta accountId is required (e.g. 1234567890)");
+    if (!accountId) throw new Error("Meta accountId is required in accountIds array (e.g. accountIds: ['1234567890'])");
     const account = new AdAccount(`act_${accountId}`);
 
     const { level, fields, params } = buildInsightsQuery(report);
@@ -311,7 +319,7 @@ class FacebookExecutor {
     // Legacy method for backward compatibility - uses first accountId
     const accountIds = this.options.credentials.accountIds;
     if (!accountIds || accountIds.length === 0) {
-      throw new Error("Meta accountId is required (e.g. 1234567890)");
+      throw new Error("Meta accountIds array is required (e.g. accountIds: ['1234567890'])");
     }
     return this.fetchInsightsForAccount(report, accountIds[0]);
   }
@@ -502,7 +510,7 @@ class FacebookExecutor {
       const { accountIds } = this.options.credentials;
       
       if (!accountIds || accountIds.length === 0) {
-        throw new Error('At least one account ID is required');
+        throw new Error('At least one account ID is required in accountIds array (e.g. accountIds: ["1234567890"])');
       }
       
       // Check if this is a creative preview request

@@ -1,5 +1,6 @@
 // delta.js
 const { groupRows } = require("./group-by");
+const { applyActionLabelsStep } = require("./fb/apply-action-labels-step");
 
 // ----- tiny path utils -----
 function getAtPath(obj, path) {
@@ -147,6 +148,9 @@ async function deltaAugment(rows, cfg = {}, ctx) {
   const prevRaw      = await ctx.fetch({ from_date: baseline.from_date, to_date: baseline.to_date }, "previous");
   const prevNorm     = await ctx.runPre(prevRaw);
   const prevGrouped  = gcfg ? groupRows(prevNorm, gcfg) : prevNorm;
+  // Apply action labels to previous period data (since applyActionLabels runs after group in pipeline,
+  // it's not included in runPre, so we need to apply it manually here)
+  const prevWithLabels = await applyActionLabelsStep(prevGrouped, {}, ctx);
 
   // 3b) apply the SAME filter to baseline if requested
   const filterMode   = cfg.filterMode || "both";
@@ -164,7 +168,7 @@ async function deltaAugment(rows, cfg = {}, ctx) {
   };
 
   const rowsFiltered = filterIfNeeded(rows, "curr");
-  const prevFiltered = filterIfNeeded(prevGrouped, "prev");
+  const prevFiltered = filterIfNeeded(prevWithLabels, "prev");
 
   // 4) index both sides by keys + UNION of keys
   

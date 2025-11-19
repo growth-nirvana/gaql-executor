@@ -118,11 +118,31 @@ function rollupEnvelopeStep(rows, cfg = {}, ctx) {
       const discovered = new Set();
       
       // Scan rows to find all numeric keys under the base path
+      // For actions_by_type and action_values_by_type, filter out canonical keys
+      // Canonical keys are typically snake_case (lowercase with underscores) and don't have spaces
+      // Readable labels typically have spaces, special characters (—, etc.), or are Title Case
+      // Since applyActionLabels should have replaced canonical keys with readable labels,
+      // we filter out keys that look like canonical keys (snake_case without spaces)
+      const isActionType = basePath === "metrics.actions_by_type" || basePath === "metrics.action_values_by_type";
+      
       for (const row of scan) {
         const baseObj = getAtPath(row, basePath);
         if (baseObj && typeof baseObj === "object" && !Array.isArray(baseObj)) {
           for (const key of Object.keys(baseObj)) {
             if (key !== "__proto__" && typeof baseObj[key] === "number") {
+              // Skip canonical keys for action types (they should have been replaced by applyActionLabels)
+              // Canonical keys are snake_case (lowercase with underscores, no spaces)
+              // Readable labels have spaces, special characters, or are Title Case
+              if (isActionType) {
+                // Check if key looks like canonical (snake_case: lowercase, underscores, no spaces)
+                // vs readable (has spaces, special chars like —, or Title Case)
+                const looksCanonical = /^[a-z_]+$/.test(key) && key.includes("_") && !key.includes(" ");
+                // Also check for common canonical prefixes
+                const hasCanonicalPrefix = /^(offsite_conversion|onsite_conversion|app_custom_event|custom_conversion|link_click|purchase|comment|like|post_|video_view|page_)/.test(key);
+                if (looksCanonical || hasCanonicalPrefix) {
+                  continue;
+                }
+              }
               discovered.add(key);
             }
           }

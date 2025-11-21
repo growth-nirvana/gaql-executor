@@ -25,6 +25,43 @@ const ATTR_FIELDS = {
   // Add more as needed (objective, status, etc.)
 };
 
+// Campaign entity fields (from /campaigns endpoint, not Insights)
+// Maps our cross-platform path to Facebook API field names
+const CAMPAIGN_ENTITY_FIELDS = {
+  "campaign.id": "id",
+  "campaign.name": "name",
+  "campaign.objective": "objective",
+  "campaign.status": "status",
+  "campaign.configured_status": "configured_status",
+  "campaign.effective_status": "effective_status",
+  "campaign.buying_type": "buying_type",
+  "campaign.budget_remaining": "budget_remaining",
+  "campaign.daily_budget": "daily_budget",
+  "campaign.lifetime_budget": "lifetime_budget",
+  "campaign.spend_cap": "spend_cap",
+  "campaign.start_time": "start_time",
+  "campaign.stop_time": "stop_time",
+  "campaign.created_time": "created_time",
+  "campaign.updated_time": "updated_time",
+  "campaign.bid_strategy": "bid_strategy",
+  "campaign.pacing_type": "pacing_type",
+  "campaign.special_ad_categories": "special_ad_categories",
+  "campaign.special_ad_category": "special_ad_category",
+  "campaign.special_ad_category_country": "special_ad_category_country",
+  "campaign.source_campaign_id": "source_campaign_id",
+  "campaign.boosted_object_id": "boosted_object_id",
+  "campaign.topline_id": "topline_id",
+  "campaign.can_create_brand_lift_study": "can_create_brand_lift_study",
+  "campaign.can_use_spend_cap": "can_use_spend_cap",
+  "campaign.has_secondary_skadnetwork_reporting": "has_secondary_skadnetwork_reporting",
+  "campaign.is_skadnetwork_attribution": "is_skadnetwork_attribution",
+  "campaign.smart_promotion_type": "smart_promotion_type",
+  "campaign.budget_rebalance_flag": "budget_rebalance_flag",
+  "campaign.last_budget_toggling_time": "last_budget_toggling_time",
+  "campaign.primary_attribution": "primary_attribution",
+  "account.id": "account_id",
+};
+
 // Metrics we can read directly from Insights
 const METRIC_FIELDS = {
   "metrics.spend": "spend",
@@ -65,4 +102,5 @@ module.exports = {
   ATTR_FIELDS,
   METRIC_FIELDS,
   SEGMENT_TO_BREAKDOWN,
+  CAMPAIGN_ENTITY_FIELDS,
 };

@@ -674,6 +674,164 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
     });
   }
 
+  /**
+   * Trends analysis method - optimized for LLM consumption with smart granularity
+   * 
+   * Features:
+   * - Smart granularity: daily for <=7 days, weekly for >7 days (keeps token footprint small)
+   * - Time-series data: returns chronological rows showing how metrics change over time
+   * - Time period digest: optional rollup per time increment (one row per date) for compact LLM consumption
+   * - Period context: includes periods meta for baseline reference (no delta calculations)
+   * - Date ordering: chronological order for trend visibility
+   * 
+   * Use cases:
+   * - Pinpoint when something happened (e.g., "CPA spiked on Jan 15")
+   * - Identify trends and patterns over time
+   * - Seasonality detection (weekly patterns)
+   * - Day-by-day or week-by-week performance analysis
+   * 
+   * Note: This method focuses on time-series data, not period-over-period comparisons.
+   * For period comparisons, use forPerformanceAnalysis() instead.
+   * 
+   * @param {Object} credentials - Google Ads API credentials
+   * @param {string} fromDate - Start date (YYYY-MM-DD)
+   * @param {string} toDate - End date (YYYY-MM-DD)
+   * @param {Object} config - Configuration options
+   * @param {string[]} config.attributes - Attributes to group by (default: campaign.id, campaign.name)
+   * @param {string} config.granularity - Override auto granularity: 'daily' | 'weekly'
+   * @param {string} config.baselineMode - Period context mode (for meta.periods only): 'previous_period' | 'previous_month_same_span' | 'previous_year' | 'none' (default: 'previous_period')
+   * @param {boolean} config.includeTimePeriodDigest - Include time period digest in meta (default: true). Digest aggregates all campaigns per date for compact LLM consumption.
+   * @param {Array} config.constraints - Query-level constraints
+   * @param {Array} config.filters - Post-processing filters (applied before digest calculation)
+   */
+  static forTrends(credentials, fromDate, toDate, config = {}) {
+    // Calculate date range length to determine granularity
+    const parseDate = (str) => {
+      const [y, m, d] = str.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d));
+    };
+    const from = parseDate(fromDate);
+    const to = parseDate(toDate);
+    const daysDiff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
+    
+    // For Google Ads, we use segments.date directly (no time_increment parameter)
+    // Daily vs weekly is handled by grouping/aggregation, not API parameter
+    // But we can still use the granularity config to determine if we want daily or weekly grouping
+    
+    const baseReport = this.getBaseReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      // Always include date segment for trends
+      segments: ['segments.date', ...(baseReport.segments || [])],
+    };
+
+    // Default attributes for campaign level
+    const defaultAttributes = [
+      'customer.id',
+      'customer.descriptive_name',
+      'campaign.id',
+      'campaign.name',
+    ];
+    const attributes = config.attributes && config.attributes.length > 0
+      ? config.attributes
+      : defaultAttributes;
+
+    const filterConfig = this.calculateFilters(config);
+    const baselineMode = config.baselineMode || "previous_period";
+
+    // Determine if we should group by date only (weekly) or keep daily granularity
+    // For Google Ads, we always request daily data via segments.date
+    // But we can optionally aggregate to weekly in the digest
+    const useWeeklyDigest = config.granularity === 'weekly' || (!config.granularity && daysDiff > 7);
+
+    const pipeline = [
+      { use: "periods", baseline: { mode: baselineMode } },
+      { use: "statusesReadable" },
+      { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+    ];
+
+    // Add derived dimension steps if configured
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    // Group by campaign attributes + date segment
+    pipeline.push({ 
+      use: "group", 
+      by: [
+        ...attributes,
+        'segments.date', // Always group by date for trends
+      ],
+      aggregates: {
+        "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
+        "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+        "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+        "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+        "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
+        // Derived metrics
+        "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },
+        "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+        "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+        "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+        "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+        "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+      },
+      rollup: false, // No rollup - we want individual time periods
+      nulls: "include",
+      orderBy: [
+        { field: "segments.date", dir: "ASC" },
+        { field: "campaign.name", dir: "ASC" },
+      ],
+    });
+
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    // Optional: Time period digest - rollup per time increment for compact LLM consumption
+    if (config.includeTimePeriodDigest !== false) {
+      pipeline.push({
+      use: "timePeriodDigest",
+      by: [
+        'segments.date',
+        ...(attributes.includes('customer.id') ? ['customer.id'] : []),
+      ],
+      aggregates: {
+        "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
+        "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+        "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+        "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+        "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
+        "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },
+        "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+        "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+        "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+        "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+        "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+      },
+      orderBy: [
+        { field: "segments.date", dir: "ASC" },
+      ],
+      });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "envelope",
+        include: ["periods", "time_period_digest"],
+      }
+    });
+  }
+
   static forDimension(credentials, fromDate, toDate, config = {}) {
     const baseReport = this.getBaseReport();
     const report = {

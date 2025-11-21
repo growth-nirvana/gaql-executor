@@ -124,6 +124,117 @@ class GoogleAdsCustomerTemplate extends BaseTemplate {
       }
     });
   }
+
+  /**
+   * Trends analysis method - optimized for LLM consumption with smart granularity
+   * See GoogleAdsCampaignTemplate.forTrends() for detailed documentation
+   */
+  static forTrends(credentials, fromDate, toDate, config = {}) {
+    const parseDate = (str) => {
+      const [y, m, d] = str.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d));
+    };
+    const from = parseDate(fromDate);
+    const to = parseDate(toDate);
+    const daysDiff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
+    
+    const baseReport = this.getBaseReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      segments: ['segments.date', ...(baseReport.segments || [])],
+    };
+
+    const defaultAttributes = [
+      'customer.id',
+      'customer.descriptive_name',
+    ];
+    const attributes = config.attributes && config.attributes.length > 0
+      ? config.attributes
+      : defaultAttributes;
+
+    const filterConfig = this.calculateFilters(config);
+    const baselineMode = config.baselineMode || "previous_period";
+
+    const pipeline = [
+      { use: "periods", baseline: { mode: baselineMode } },
+      { use: "statusesReadable" },
+      { use: "formatMicros", fields: ["metrics.cost_micros"] },
+    ];
+
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+    if (derivedDimensions) {
+      for (const derivedDim of derivedDimensions) {
+        pipeline.push({ use: "deriveDimension", ...derivedDim });
+      }
+    }
+
+    pipeline.push({ 
+      use: "group", 
+      by: [
+        ...attributes,
+        'segments.date',
+      ],
+      aggregates: {
+        "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
+        "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+        "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+        "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+        "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
+        "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },
+        "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+        "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+        "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+        "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+        "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+      },
+      rollup: false,
+      nulls: "include",
+      orderBy: [
+        { field: "segments.date", dir: "ASC" },
+        { field: "customer.descriptive_name", dir: "ASC" },
+      ],
+    });
+
+    if (filterConfig) {
+      pipeline.push({ use: "filter", ...filterConfig });
+    }
+
+    if (config.includeTimePeriodDigest !== false) {
+      pipeline.push({
+        use: "timePeriodDigest",
+        by: ['segments.date'], // Customer level - just group by date
+        aggregates: {
+          "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
+          "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+          "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+          "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+          "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
+          "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },
+          "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+          "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+          "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+          "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+          "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+        },
+        orderBy: [
+          { field: "segments.date", dir: "ASC" },
+        ],
+      });
+    }
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "envelope",
+        include: ["periods", "time_period_digest"],
+      }
+    });
+  }
 }
 
 module.exports = { GoogleAdsCustomerTemplate };

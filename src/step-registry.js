@@ -9,6 +9,7 @@ const { shareOfStep } = require("./share-of");
 const { statsStep } = require("./stats");
 const { deriveDimensionStep } = require("./derive-dimension");
 const { actionsToColumnsRows } = require("./fb/actions-to-columns");
+const { filterActionsRows } = require("./fb/filter-actions");
 const { loadCustomConversionsStep } = require("./fb/load-custom-conversions-step");
 const { applyActionLabelsStep } = require("./fb/apply-action-labels-step");
 const { enrichWithConversionActions } = require("./google-ads/conversion-actions-enricher");
@@ -16,6 +17,7 @@ const { topNStep } = require("./top-n");
 const { derive } = require("./derive");
 const { rollupEnvelopeStep } = require("./rollup-envelope");
 const { filterStep } = require("./filter");
+const { timePeriodDigestStep } = require("./time-period-digest");
 
 function withTraits(fn, traits) {
   fn.traits = traits;
@@ -70,6 +72,9 @@ const STEPS = {
   actionsToColumns: withTraits(
     (rows, cfg, ctx) => actionsToColumnsRows(rows, cfg, ctx), { phase: "post", changesCardinality: false }
   ),
+  filterActions: withTraits(
+    (rows, cfg, ctx) => filterActionsRows(rows, cfg, ctx), { phase: "post", changesCardinality: false }
+  ),
   conversionActionsEnricher: withTraits(
     async (rows, cfg, ctx) => enrichWithConversionActions(rows, cfg, ctx), 
     { phase: "post", changesCardinality: false }
@@ -83,6 +88,10 @@ const STEPS = {
   topN: withTraits((rows, cfg, ctx) => topNStep(rows, cfg, ctx), { phase: "post", changesCardinality: false }),
   rollupEnvelope: (fn => (fn.traits = { phase: "post", changesCardinality: false }, fn))(
     (rows, cfg, ctx) => rollupEnvelopeStep(rows, cfg, ctx)
+  ),
+  timePeriodDigest: withTraits(
+    (rows, cfg, ctx) => timePeriodDigestStep(rows, cfg, ctx),
+    { phase: "post", changesCardinality: false }
   ),
   pruneRows: (fn => (fn.traits = { phase: "post", changesCardinality: true }, fn))(
     (rows, cfg, ctx) => pruneRowsStep(rows, cfg, ctx)

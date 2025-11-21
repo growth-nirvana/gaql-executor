@@ -1,8 +1,25 @@
 // src/fb-executor.js
 const bizSdk = require("facebook-nodejs-business-sdk");
-const { buildInsightsQuery, shapeRow } = require("./fb-translate");
+const { buildInsightsQuery, shapeRow, toCampaignEntityFields, shapeCampaignRow } = require("./fb-translate");
+const { CAMPAIGN_ENTITY_FIELDS } = require("./fb-mappings");
 const { STEPS } = require("../step-registry"); // reuse your pipeline
 const { FacebookAdsApi, AdAccount } = bizSdk;
+
+// Operator mapping for constraints (shared with fb-translate.js logic)
+const OP_MAP = {
+  "=": "EQUAL",
+  "!=": "NOT_EQUAL",
+  ">": "GREATER_THAN",
+  ">=": "GREATER_THAN_OR_EQUAL",
+  "<": "LESS_THAN",
+  "<=": "LESS_THAN_OR_EQUAL",
+  IN: "IN",
+  "NOT IN": "NOT_IN",
+  CONTAINS: "CONTAIN",
+  "NOT CONTAINS": "NOT_CONTAIN",
+  "STARTS_WITH": "STARTS_WITH",
+  "NOT STARTS_WITH": "NOT_STARTS_WITH",
+};
 
 class FacebookExecutor {
   constructor(options = {}) {
@@ -325,6 +342,109 @@ class FacebookExecutor {
   }
 
   /**
+   * Fetch campaigns directly from /campaigns endpoint (not Insights API)
+   * This is used for dimension queries where we only need campaign attributes
+   */
+  async fetchCampaignsForAccount(report, accountId) {
+    this.initializeClient();
+
+    if (!accountId) throw new Error("Meta accountId is required");
+    const account = new AdAccount(`act_${accountId}`);
+
+    // Build fields list from requested attributes
+    const fields = toCampaignEntityFields(report.attributes || []);
+    
+    // Build parameters
+    const params = {};
+    
+    // Handle constraints/filtering
+    if (report.constraints && Array.isArray(report.constraints) && report.constraints.length > 0) {
+      // Convert constraints to Facebook filtering format
+      const filtering = [];
+      for (const c of report.constraints) {
+        if (c && c.key && c.op) {
+          const field = CAMPAIGN_ENTITY_FIELDS[c.key] || c.key;
+          const operator = OP_MAP[c.op] || "EQUAL";
+          filtering.push({ field, operator, value: c.val });
+        }
+      }
+      if (filtering.length > 0) {
+        params.filtering = filtering;
+      }
+    }
+
+    // Set limit if specified
+    if (report.limit) {
+      params.limit = report.limit;
+    }
+
+    // Fetch campaigns with pagination
+    const pageAll = report.parameters?.page_all !== false; // Default to true
+    const maxPages = Number.isFinite(report.parameters?.max_pages) ? report.parameters.max_pages : 100;
+    
+    const runCursor = async (p) => {
+      let cursor = await account.getCampaigns(fields, p);
+      const collected = [];
+      let pages = 1;
+
+      // Process first page
+      const firstPage = cursor.map((r) => r._data || r);
+      collected.push(...firstPage);
+
+      // Page through remaining results
+      if (pageAll && cursor.hasNext()) {
+        while (cursor.hasNext() && pages < maxPages) {
+          await new Promise(resolve => setTimeout(resolve, 200)); // Rate limit delay
+          cursor = await cursor.next();
+          const pageData = cursor.map((r) => r._data || r);
+          collected.push(...pageData);
+          pages++;
+        }
+      }
+      return collected;
+    };
+
+    let raw;
+    const maxRetries = 5;
+    const baseBackoff = 2;
+    const maxBackoff = 300;
+    let retryCount = 0;
+    
+    while (retryCount <= maxRetries) {
+      try {
+        raw = await runCursor(params);
+        break;
+      } catch (e) {
+        const msg = String(e?.message || "");
+        const isRateLimit = e?.status === 429 || msg.includes("rate limit") || msg.includes("too many requests");
+
+        if (isRateLimit && retryCount < maxRetries) {
+          retryCount++;
+          const backoffSeconds = Math.min(baseBackoff ** retryCount, maxBackoff);
+          await new Promise(resolve => setTimeout(resolve, backoffSeconds * 1000));
+        } else if (isRateLimit && retryCount >= maxRetries) {
+          throw new Error(`Rate limit error after ${maxRetries} retries: ${msg}`);
+        } else {
+          throw e;
+        }
+      }
+    }
+
+    // Shape rows to our nested structure
+    const rows = raw.map((row) => shapeCampaignRow(row, report));
+    return { rows, raw };
+  }
+
+  async fetchCampaigns(report) {
+    // Legacy method for backward compatibility - uses first accountId
+    const accountIds = this.options.credentials.accountIds;
+    if (!accountIds || accountIds.length === 0) {
+      throw new Error("Meta accountIds array is required (e.g. accountIds: ['1234567890'])");
+    }
+    return this.fetchCampaignsForAccount(report, accountIds[0]);
+  }
+
+  /**
    * Helper function to process tasks with controlled concurrency (queue)
    * Processes tasks in batches of `concurrency` at a time, with delays between requests
    */
@@ -543,6 +663,88 @@ class FacebookExecutor {
           };
         }
         return creatives;
+      }
+
+      // Check if this is a campaign dimension query (no metrics, use /campaigns endpoint)
+      // This uses the /campaigns endpoint directly instead of Insights API
+      const isCampaignDimensionQuery = report.entity === 'campaign' && 
+                                       (!report.metrics || report.metrics.length === 0);
+      
+      if (isCampaignDimensionQuery) {
+        // Use campaigns endpoint for dimension queries
+        if (accountIds.length === 1) {
+          // Single account
+          const { rows } = await this.fetchCampaignsForAccount(this.options.report, accountIds[0]);
+          const ctx = this.buildContext();
+          const processed = await this.runPipeline(rows, ctx);
+
+          const { output } = this.options || {};
+          if (output && output.mode === "envelope") {
+            const meta = this.collectMeta(ctx, output);
+            return { 
+              meta, 
+              results: processed
+            };
+          }
+          return processed;
+        } else {
+          // Multiple accounts - fetch from all and combine
+          const allRows = [];
+          const accountInstances = [];
+          const accountResults = {
+            succeeded: [],
+            failed: []
+          };
+
+          for (const accountId of accountIds) {
+            try {
+              const { rows } = await this.fetchCampaignsForAccount(this.options.report, accountId);
+              allRows.push(...rows);
+              accountInstances.push({ accountId });
+              accountResults.succeeded.push({
+                accountId,
+                rowCount: rows.length
+              });
+            } catch (err) {
+              const errorMsg = err?.message || String(err);
+              console.error(`Failed to fetch campaigns for account ${accountId}: ${errorMsg}`);
+              accountResults.failed.push({
+                accountId,
+                error: errorMsg
+              });
+            }
+          }
+
+          if (accountResults.succeeded.length === 0) {
+            throw new Error(`All accounts failed. Failed accounts: ${accountResults.failed.map(f => f.accountId).join(', ')}`);
+          }
+
+          console.error(`Account processing summary:`);
+          console.error(`- Succeeded: ${accountResults.succeeded.length} accounts`);
+          console.error(`- Failed: ${accountResults.failed.length} accounts`);
+
+          const ctx = this.buildContextMultiAccount(accountInstances);
+          const processed = await this.runPipeline(allRows, ctx);
+
+          const { output } = this.options || {};
+          if (output && output.mode === "envelope") {
+            const meta = this.collectMeta(ctx, output);
+            return { 
+              meta, 
+              results: processed,
+              accountResults: {
+                succeeded: accountResults.succeeded,
+                failed: accountResults.failed,
+                summary: {
+                  total: accountIds.length,
+                  succeeded: accountResults.succeeded.length,
+                  failed: accountResults.failed.length
+                }
+              }
+            };
+          }
+          return processed;
+        }
       }
 
       // Standard insights request - support multiple accounts

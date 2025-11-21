@@ -743,6 +743,230 @@ class FacebookAdSetTemplate extends BaseTemplate {
       }
     });
   }
+
+  /**
+   * Trends analysis method - optimized for LLM consumption with smart granularity
+   * See FacebookCampaignTemplate.forTrends() for detailed documentation
+   */
+  static forTrends(credentials, fromDate, toDate, config = {}) {
+    // Calculate date range length to determine granularity
+    const parseDate = (str) => {
+      const [y, m, d] = str.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d));
+    };
+    const from = parseDate(fromDate);
+    const to = parseDate(toDate);
+    const daysDiff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
+    
+    let timeIncrement = 1;
+    let granularityLabel = 'daily';
+    
+    if (config.granularity) {
+      if (config.granularity === 'daily') {
+        timeIncrement = 1;
+        granularityLabel = 'daily';
+      } else if (config.granularity === 'weekly') {
+        timeIncrement = 7;
+        granularityLabel = 'weekly';
+      }
+    } else {
+      if (daysDiff <= 7) {
+        timeIncrement = 1;
+        granularityLabel = 'daily';
+      } else {
+        timeIncrement = 7;
+        granularityLabel = 'weekly';
+      }
+    }
+
+    const baseReport = this.getBaseAdSetReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      segments: ['segments.date', ...(baseReport.segments || [])],
+      parameters: {
+        ...(baseReport.parameters || {}),
+        time_increment: timeIncrement,
+      },
+    };
+
+    const defaultAttributes = [
+      'account.id',
+      'account.name',
+      'campaign.id',
+      'campaign.name',
+      'adset.id',
+      'adset.name',
+    ];
+    const attributes = config.attributes && config.attributes.length > 0
+      ? config.attributes
+      : defaultAttributes;
+
+    const conversionActions = normalizeActionList(
+      config.conversionAction,
+      "_total"
+    );
+    
+    const includeActions = config.includeActions && Array.isArray(config.includeActions) && config.includeActions.length > 0
+      ? config.includeActions.filter(action => action !== "*")
+      : null;
+
+    const conversionValueActions = normalizeActionList(
+      config.conversionValueAction !== undefined
+        ? config.conversionValueAction
+        : config.conversionAction,
+      "_total_value"
+    );
+    
+    const conversionAggregates = {};
+    if (conversionActions.length === 0 || (conversionActions.length === 1 && conversionActions[0] === "_total")) {
+      conversionAggregates["metrics.conversions"] = {
+        fn: "SUM_EXPR",
+        sources: [
+          "metrics.actions_by_type._total",
+          "metrics.conversions_by_type._total"
+        ],
+        as: "metrics.conversions"
+      };
+    } else {
+      conversionAggregates["metrics.conversions"] = {
+        fn: "SUM_EXPR",
+        sources: conversionActions.flatMap(action => {
+          if (action === "_total") {
+            return [
+              "metrics.actions_by_type._total",
+              "metrics.conversions_by_type._total"
+            ];
+          }
+          return [
+            `metrics.actions_by_type.${action}`,
+            `metrics.conversions_by_type.${action}`
+          ];
+        }).filter(Boolean),
+        as: "metrics.conversions"
+      };
+    }
+    
+    const conversionValueAggregates = {};
+    if (conversionValueActions.length === 0 || (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value")) {
+      conversionValueAggregates["metrics.conversions_value"] = {
+        fn: "SUM_EXPR",
+        sources: [
+          "metrics.action_values_by_type._total_value",
+          "metrics.conversion_values_by_type._total_value"
+        ],
+        as: "metrics.conversions_value"
+      };
+    } else {
+      conversionValueAggregates["metrics.conversions_value"] = {
+        fn: "SUM_EXPR",
+        sources: conversionValueActions.flatMap(action => {
+          if (action === "_total_value") {
+            return [
+              "metrics.action_values_by_type._total_value",
+              "metrics.conversion_values_by_type._total_value"
+            ];
+          }
+          return [
+            `metrics.action_values_by_type.${action}`,
+            `metrics.conversion_values_by_type.${action}`
+          ];
+        }).filter(Boolean),
+        as: "metrics.conversions_value"
+      };
+    }
+
+    const loadCustomConversionsStep = config.loadCustomConversions === false ? [] : [{
+      use: "loadCustomConversions",
+      fields: config.customConversionFields || CUSTOM_CONVERSION_FIELDS,
+      cacheTtlMs: config.customConversionCacheTtlMs,
+      limit: config.customConversionLimit,
+      maxPages: config.customConversionMaxPages,
+    }];
+
+    const filterConfig = this.calculateFilters(config);
+    const baselineMode = config.baselineMode || "previous_period";
+
+    const pipeline = [
+      { use: "periods", baseline: { mode: baselineMode } },
+      ...loadCustomConversionsStep,
+      { 
+        use: 'actionsToColumns',
+        debug: config.debugCustomConversions !== false,
+        sources: [
+          { from: 'metrics.actions', to: 'metrics.actions_by_type', totalAs: '_total', keepRaw: true },
+          { from: 'metrics.action_values', to: 'metrics.action_values_by_type', totalAs: '_total_value', keepRaw: true },
+          { from: 'metrics.conversions_api', to: 'metrics.conversions_by_type', totalAs: '_total', keepRaw: true },
+          { from: 'metrics.conversion_values_api', to: 'metrics.conversion_values_by_type', totalAs: '_total_value', keepRaw: true },
+        ]
+      },
+      ...(includeActions ? [{
+        use: 'filterActions',
+        includeActions: includeActions,
+      }] : []),
+      { 
+        use: "group", 
+        by: [
+          ...attributes,
+          'segments.date',
+        ],
+        aggregates: {
+          "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+          "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+          ...conversionAggregates,
+          ...conversionValueAggregates,
+          "metrics.spend": { fn: "SUM", as: "metrics.cost" },
+          "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+          "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+          "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+          "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+          "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+        },
+        rollup: false,
+        nulls: "include",
+        orderBy: [
+          { field: "segments.date", dir: "ASC" },
+          { field: "adset.name", dir: "ASC" },
+        ],
+      },
+      ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
+      { use: "applyActionLabels" },
+      ...(config.includeTimePeriodDigest !== false ? [{
+        use: "timePeriodDigest",
+        by: [
+          'segments.date',
+          ...(attributes.includes('account.id') ? ['account.id'] : []),
+        ],
+        aggregates: {
+          "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+          "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+          "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+          "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
+          "metrics.cost": { fn: "SUM", as: "metrics.cost" },
+          "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+          "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+          "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+          "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+          "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+        },
+        orderBy: [
+          { field: "segments.date", dir: "ASC" },
+        ],
+      }] : []),
+    ];
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "envelope",
+        include: ["periods", "time_period_digest"],
+      }
+    });
+  }
 }
 
 module.exports = { FacebookAdSetTemplate };

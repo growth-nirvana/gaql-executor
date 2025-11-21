@@ -54,6 +54,18 @@ class FacebookCampaignTemplate extends BaseTemplate {
       config.conversionAction,
       "_total"
     );
+    
+    // Allow configurable action filtering (which actions to include in output)
+    // Examples:
+    //   config.includeActions = ["purchase", "add_to_cart", "lead"]  // Include only these actions
+    //   config.includeActions = null or undefined                    // Include all actions (default)
+    //   config.includeActions = ["*"]                                 // Include all actions (explicit)
+    //
+    // Action names are automatically normalized. Always includes "_total" and "_total_value".
+    // If not specified or empty array, all actions are included.
+    const includeActions = config.includeActions && Array.isArray(config.includeActions) && config.includeActions.length > 0
+      ? config.includeActions.filter(action => action !== "*")  // Remove wildcard if present
+      : null;  // null = include all
     const conversionValueActions = normalizeActionList(
       config.conversionValueAction !== undefined
         ? config.conversionValueAction
@@ -367,6 +379,11 @@ class FacebookCampaignTemplate extends BaseTemplate {
             { from: 'metrics.conversion_values_api', to: 'metrics.conversion_values_by_type', totalAs: '_total_value', keepRaw: true },
           ]
         },
+        // Filter actions if includeActions is specified
+        ...(includeActions ? [{
+          use: 'filterActions',
+          includeActions: includeActions,
+        }] : []),
         { 
           use: "group", 
           by: [
@@ -745,13 +762,62 @@ class FacebookCampaignTemplate extends BaseTemplate {
   }
 
   static forDimension(credentials, fromDate, toDate, config = {}) {
+    // Default campaign entity attributes (all available fields from /campaigns endpoint)
+    const defaultCampaignAttributes = [
+      'account.id',
+      'campaign.id',
+      'campaign.name',
+      'campaign.objective',
+      'campaign.status',
+      'campaign.configured_status',
+      'campaign.effective_status',
+      'campaign.buying_type',
+      'campaign.budget_remaining',
+      'campaign.daily_budget',
+      'campaign.lifetime_budget',
+      'campaign.spend_cap',
+      'campaign.start_time',
+      'campaign.stop_time',
+      'campaign.created_time',
+      'campaign.updated_time',
+      'campaign.bid_strategy',
+      'campaign.pacing_type',
+      'campaign.special_ad_categories',
+      'campaign.special_ad_category',
+      'campaign.special_ad_category_country',
+      'campaign.source_campaign_id',
+      'campaign.boosted_object_id',
+      'campaign.topline_id',
+      'campaign.can_create_brand_lift_study',
+      'campaign.can_use_spend_cap',
+      'campaign.has_secondary_skadnetwork_reporting',
+      'campaign.is_skadnetwork_attribution',
+      'campaign.smart_promotion_type',
+      'campaign.budget_rebalance_flag',
+      'campaign.last_budget_toggling_time',
+      'campaign.primary_attribution',
+    ];
+
+    // If no attributes specified, use all default campaign entity attributes
+    // This ensures both the report and grouping use all attributes
+    const finalConfig = {
+      ...config,
+      attributes: config.attributes && config.attributes.length > 0 
+        ? config.attributes 
+        : defaultCampaignAttributes,
+    };
+
     const baseReport = this.getBaseCampaignReport();
     const report = {
       ...baseReport,
+      // Use attributes from config (which now defaults to all campaign entity attributes)
+      attributes: finalConfig.attributes,
+      // Remove metrics for dimension queries - this triggers use of /campaigns endpoint
+      metrics: [],
       from_date: fromDate,
       to_date: toDate,
-      ...(config.constraints && { constraints: config.constraints }),
-      segments: config.segments !== undefined ? config.segments : (baseReport.segments || []),
+      ...(finalConfig.constraints && { constraints: finalConfig.constraints }),
+      segments: finalConfig.segments !== undefined ? finalConfig.segments : (baseReport.segments || []),
     };
 
     // Simplified pipeline - similar to change event template
@@ -762,7 +828,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
 
     // Add derived dimension steps if configured (before grouping)
     // This allows creating new dimensions from existing attributes
-    const derivedDimensions = this.calculateDerivedDimensions(config);
+    const derivedDimensions = this.calculateDerivedDimensions(finalConfig);
     if (derivedDimensions) {
       for (const derivedDim of derivedDimensions) {
         pipeline.push({ use: "deriveDimension", ...derivedDim });
@@ -770,20 +836,24 @@ class FacebookCampaignTemplate extends BaseTemplate {
     }
 
     // Group by selected attributes (no aggregates - just dimension values)
+    // For dimension queries, include ALL attributes in the 'by' array so they're preserved in output
+    // Use report.attributes (which includes all defaults) rather than just calculateGroupByAttributes
+    const groupByAttributes = finalConfig.attributes && finalConfig.attributes.length > 0
+      ? finalConfig.attributes  // Use all requested attributes
+      : report.attributes;       // Fallback to report attributes (which includes defaults)
+    
     pipeline.push({ 
       use: "group", 
-      by: [
-        ...this.calculateGroupByAttributes(config),
-      ],
+      by: groupByAttributes,
       aggregates: {}, // No metrics - just grouping for dimensions
       rollup: false,
       nulls: "include",
       // Default ordering by campaign name
-      orderBy: config.orderBy || [{ field: "campaign.name", dir: "ASC" }],
+      orderBy: finalConfig.orderBy || [{ field: "campaign.name", dir: "ASC" }],
     });
 
     // Add filter step if filters are configured
-    const filterConfig = this.calculateFilters(config);
+    const filterConfig = this.calculateFilters(finalConfig);
     if (filterConfig) {
       pipeline.push({ use: "filter", ...filterConfig });
     }
@@ -794,6 +864,291 @@ class FacebookCampaignTemplate extends BaseTemplate {
       pipeline,
       output: {
         mode: "flat", // Flat output - just the results array
+      }
+    });
+  }
+
+  /**
+   * Trends analysis method - optimized for LLM consumption with smart granularity
+   * 
+   * Features:
+   * - Smart granularity: daily for <=7 days, weekly for >7 days (keeps token footprint small)
+   * - Time-series data: returns chronological rows showing how metrics change over time
+   * - Time period digest: optional rollup per time increment (one row per date) for compact LLM consumption
+   * - Period context: includes periods meta for baseline reference (no delta calculations)
+   * - Date ordering: chronological order for trend visibility
+   * 
+   * Use cases:
+   * - Pinpoint when something happened (e.g., "CPA spiked on Jan 15")
+   * - Identify trends and patterns over time
+   * - Seasonality detection (weekly patterns)
+   * - Day-by-day or week-by-week performance analysis
+   * 
+   * Note: This method focuses on time-series data, not period-over-period comparisons.
+   * For period comparisons, use forPerformanceAnalysis() instead.
+   * 
+   * @param {Object} credentials - Facebook API credentials
+   * @param {string} fromDate - Start date (YYYY-MM-DD)
+   * @param {string} toDate - End date (YYYY-MM-DD)
+   * @param {Object} config - Configuration options
+   * @param {string[]} config.attributes - Attributes to group by (default: campaign.id, campaign.name)
+   * @param {string} config.granularity - Override auto granularity: 'daily' | 'weekly'
+   * @param {string} config.baselineMode - Period context mode (for meta.periods only): 'previous_period' | 'previous_month_same_span' | 'previous_year' | 'none' (default: 'previous_period')
+   * @param {boolean} config.includeTimePeriodDigest - Include time period digest in meta (default: true). Digest aggregates all campaigns per date for compact LLM consumption.
+   * @param {Array} config.constraints - Query-level constraints
+   * @param {Array} config.filters - Post-processing filters (applied before digest calculation)
+   */
+  static forTrends(credentials, fromDate, toDate, config = {}) {
+    // Calculate date range length to determine granularity
+    const parseDate = (str) => {
+      const [y, m, d] = str.split('-').map(Number);
+      return new Date(Date.UTC(y, m - 1, d));
+    };
+    const from = parseDate(fromDate);
+    const to = parseDate(toDate);
+    const daysDiff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
+    
+    // Smart granularity: daily for short periods, weekly for medium/long periods
+    // Note: Facebook doesn't support monthly time_increment directly, so we use weekly for longer periods
+    let timeIncrement = 1; // default daily
+    let granularityLabel = 'daily';
+    
+    if (config.granularity) {
+      // Explicit override
+      if (config.granularity === 'daily') {
+        timeIncrement = 1;
+        granularityLabel = 'daily';
+      } else if (config.granularity === 'weekly') {
+        timeIncrement = 7;
+        granularityLabel = 'weekly';
+      } else if (config.granularity === 'monthly') {
+        // For monthly, we still use weekly (7) as Facebook doesn't support monthly time_increment
+        // The data will be weekly but can be interpreted as monthly trends
+        timeIncrement = 7;
+        granularityLabel = 'weekly'; // Actually weekly, but labeled for monthly interpretation
+      }
+    } else {
+      // Auto-determine based on date range
+      if (daysDiff <= 7) {
+        timeIncrement = 1; // daily
+        granularityLabel = 'daily';
+      } else {
+        // For periods > 7 days, use weekly to keep footprint small
+        timeIncrement = 7; // weekly
+        granularityLabel = 'weekly';
+      }
+    }
+
+    const baseReport = this.getBaseCampaignReport();
+    const report = {
+      ...baseReport,
+      from_date: fromDate,
+      to_date: toDate,
+      ...(config.constraints && { constraints: config.constraints }),
+      // Always include date segment for trends
+      segments: ['segments.date', ...(baseReport.segments || [])],
+      // Configure time increment for granularity
+      parameters: {
+        ...(baseReport.parameters || {}),
+        time_increment: timeIncrement,
+      },
+    };
+
+    // Minimal metrics for trends - keep footprint small
+    const trendMetrics = [
+      'metrics.spend',
+      'metrics.clicks',
+      'metrics.impressions',
+      'metrics.actions',
+      'metrics.action_values',
+    ];
+
+    // Use minimal attributes if not specified
+    const defaultAttributes = [
+      'account.id',
+      'account.name',
+      'campaign.id',
+      'campaign.name',
+    ];
+    const attributes = config.attributes && config.attributes.length > 0
+      ? config.attributes
+      : defaultAttributes;
+
+    // Build aggregates - minimal set for trends
+    const conversionActions = normalizeActionList(
+      config.conversionAction,
+      "_total"
+    );
+    
+    const includeActions = config.includeActions && Array.isArray(config.includeActions) && config.includeActions.length > 0
+      ? config.includeActions.filter(action => action !== "*")
+      : null;
+
+    const conversionValueActions = normalizeActionList(
+      config.conversionValueAction !== undefined
+        ? config.conversionValueAction
+        : config.conversionAction,
+      "_total_value"
+    );
+    
+    // Build conversion aggregates (simplified for trends)
+    const conversionAggregates = {};
+    if (conversionActions.length === 0 || (conversionActions.length === 1 && conversionActions[0] === "_total")) {
+      conversionAggregates["metrics.conversions"] = {
+        fn: "SUM_EXPR",
+        sources: [
+          "metrics.actions_by_type._total",
+          "metrics.conversions_by_type._total"
+        ],
+        as: "metrics.conversions"
+      };
+    } else {
+      conversionAggregates["metrics.conversions"] = {
+        fn: "SUM_EXPR",
+        sources: conversionActions.flatMap(action => {
+          if (action === "_total") {
+            return [
+              "metrics.actions_by_type._total",
+              "metrics.conversions_by_type._total"
+            ];
+          }
+          return [
+            `metrics.actions_by_type.${action}`,
+            `metrics.conversions_by_type.${action}`
+          ];
+        }).filter(Boolean),
+        as: "metrics.conversions"
+      };
+    }
+    
+    const conversionValueAggregates = {};
+    if (conversionValueActions.length === 0 || (conversionValueActions.length === 1 && conversionValueActions[0] === "_total_value")) {
+      conversionValueAggregates["metrics.conversions_value"] = {
+        fn: "SUM_EXPR",
+        sources: [
+          "metrics.action_values_by_type._total_value",
+          "metrics.conversion_values_by_type._total_value"
+        ],
+        as: "metrics.conversions_value"
+      };
+    } else {
+      conversionValueAggregates["metrics.conversions_value"] = {
+        fn: "SUM_EXPR",
+        sources: conversionValueActions.flatMap(action => {
+          if (action === "_total_value") {
+            return [
+              "metrics.action_values_by_type._total_value",
+              "metrics.conversion_values_by_type._total_value"
+            ];
+          }
+          return [
+            `metrics.action_values_by_type.${action}`,
+            `metrics.conversion_values_by_type.${action}`
+          ];
+        }).filter(Boolean),
+        as: "metrics.conversions_value"
+      };
+    }
+
+    const loadCustomConversionsStep = config.loadCustomConversions === false ? [] : [{
+      use: "loadCustomConversions",
+      fields: config.customConversionFields || CUSTOM_CONVERSION_FIELDS,
+      cacheTtlMs: config.customConversionCacheTtlMs,
+      limit: config.customConversionLimit,
+      maxPages: config.customConversionMaxPages,
+    }];
+
+    const filterConfig = this.calculateFilters(config);
+    const baselineMode = config.baselineMode || "previous_period";
+
+    // Simplified pipeline for trends - focus on time-series data
+    const pipeline = [
+      { use: "periods", baseline: { mode: baselineMode } },
+      ...loadCustomConversionsStep,
+      { 
+        use: 'actionsToColumns',
+        debug: config.debugCustomConversions !== false,
+        sources: [
+          { from: 'metrics.actions', to: 'metrics.actions_by_type', totalAs: '_total', keepRaw: true },
+          { from: 'metrics.action_values', to: 'metrics.action_values_by_type', totalAs: '_total_value', keepRaw: true },
+          { from: 'metrics.conversions_api', to: 'metrics.conversions_by_type', totalAs: '_total', keepRaw: true },
+          { from: 'metrics.conversion_values_api', to: 'metrics.conversion_values_by_type', totalAs: '_total_value', keepRaw: true },
+        ]
+      },
+      // Filter actions if includeActions is specified
+      ...(includeActions ? [{
+        use: 'filterActions',
+        includeActions: includeActions,
+      }] : []),
+      { 
+        use: "group", 
+        by: [
+          ...attributes,
+          'segments.date', // Always group by date for trends
+        ],
+        aggregates: {
+          "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+          "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+          ...conversionAggregates,
+          ...conversionValueAggregates,
+          "metrics.spend": { fn: "SUM", as: "metrics.cost" },
+          // Minimal derived metrics for trends
+          "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+          "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+          "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+          "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+          "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+        },
+        rollup: false, // No rollup - we want individual time periods
+        nulls: "include",
+        // Order by date first (chronological), then by campaign name
+        orderBy: [
+          { field: "segments.date", dir: "ASC" },
+          { field: "campaign.name", dir: "ASC" },
+        ],
+      },
+      ...(filterConfig ? [{ use: "filter", ...filterConfig }] : []),
+      { use: "applyActionLabels" },
+      // Optional: Time period digest - rollup per time increment for compact LLM consumption
+      // This creates one row per date with all campaigns aggregated together
+      // Stored in meta.time_period_digest, doesn't modify main results
+      ...(config.includeTimePeriodDigest !== false ? [{
+        use: "timePeriodDigest",
+        by: [
+          'segments.date', // Group by date only for digest
+          // Include account.id if we have multiple accounts (preserve account dimension)
+          ...(attributes.includes('account.id') ? ['account.id'] : []),
+        ],
+        aggregates: {
+          "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
+          "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+          "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
+          "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
+          "metrics.cost": { fn: "SUM", as: "metrics.cost" },
+          // Recalculate ratios from summed totals
+          "ctr": { fn: "RATIO", num: "metrics.clicks", den: "metrics.impressions", as: "metrics.ctr" },
+          "cpc": { fn: "RATIO", num: "metrics.cost", den: "metrics.clicks", as: "metrics.cpc" },
+          "cvr": { fn: "RATIO", num: "metrics.conversions", den: "metrics.clicks", as: "metrics.cvr" },
+          "cpa": { fn: "RATIO", num: "metrics.cost", den: "metrics.conversions", as: "metrics.cpa" },
+          "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
+        },
+        orderBy: [
+          { field: "segments.date", dir: "ASC" },
+        ],
+      }] : []),
+      // Note: No delta step for trends - this is intentional
+      // Trends focus on time-series progression, not period-over-period comparisons
+      // The meta.periods object provides baseline context if needed, but we don't calculate
+      // deltas at each time point to keep the data clean and focused on the trend itself
+    ];
+
+    return new this({
+      credentials,
+      report,
+      pipeline,
+      output: {
+        mode: "envelope", // Include periods meta and time period digest
+        include: ["periods", "time_period_digest"], // Include digest in envelope
       }
     });
   }

@@ -4,6 +4,7 @@ const {
   ATTR_FIELDS,
   METRIC_FIELDS,
   SEGMENT_TO_BREAKDOWN,
+  CAMPAIGN_ENTITY_FIELDS,
 } = require("./fb-mappings");
 
 // tiny utils
@@ -57,15 +58,18 @@ function toBreakdowns(segments = []) {
 }
 
 function toTime(report) {
-  const { from_date, to_date, segments = [] } = report || {};
+  const { from_date, to_date, segments = [], parameters = {} } = report || {};
   const params = {};
 
   if (from_date && to_date) {
     params.time_range = { since: from_date, until: to_date };
   }
-  // If "segments.date" requested, ask for daily rows
+  // If "segments.date" requested, use time_increment from parameters or default to daily
   if (segments.includes("segments.date")) {
-    params.time_increment = 1; // daily
+    // Allow override via report.parameters.time_increment (for trends with weekly/monthly granularity)
+    params.time_increment = parameters.time_increment !== undefined 
+      ? parameters.time_increment 
+      : 1; // default to daily
   }
 
   return params;
@@ -224,7 +228,67 @@ function shapeRow(row, report) {
   return out;
 }
 
+// Build campaign entity fields list from attributes
+function toCampaignEntityFields(attributes = []) {
+  const fields = new Set();
+  
+  for (const attr of attributes) {
+    const field = CAMPAIGN_ENTITY_FIELDS[attr];
+    if (field) {
+      fields.add(field);
+    }
+  }
+  
+  // Always include id and account_id for basic identification
+  fields.add("id");
+  fields.add("account_id");
+  
+  return Array.from(fields);
+}
+
+// Shape one campaign entity row back to your nested schema
+function shapeCampaignRow(row, report) {
+  const out = {};
+  
+  // Map campaign entity fields to nested structure
+  for (const [path, field] of Object.entries(CAMPAIGN_ENTITY_FIELDS)) {
+    // Check if this field is requested in attributes
+    if (report.attributes?.includes(path)) {
+      let value = row[field];
+      
+      // Skip if value is null/undefined (unless it's explicitly requested)
+      if (value == null) continue;
+      
+      // Coerce numeric strings for budget fields
+      if ((path === "campaign.daily_budget" || path === "campaign.lifetime_budget" || 
+           path === "campaign.budget_remaining" || path === "campaign.spend_cap") &&
+          typeof value === "string" && /^[\d.]+$/.test(value)) {
+        value = Number(value);
+      }
+      
+      // Handle array fields (like special_ad_categories)
+      if (Array.isArray(value)) {
+        value = [...value]; // Copy array
+      }
+      
+      setAtPath(out, path, value);
+    }
+  }
+  
+  // Ensure account.id is set if account_id exists (even if not explicitly requested)
+  if (row.account_id != null) {
+    setAtPath(out, "account.id", row.account_id);
+  }
+  
+  // Note: account.name is not available from /campaigns endpoint directly
+  // It would need to be fetched separately from the account entity if needed
+  
+  return out;
+}
+
 module.exports = {
   buildInsightsQuery,
   shapeRow,
+  toCampaignEntityFields,
+  shapeCampaignRow,
 };

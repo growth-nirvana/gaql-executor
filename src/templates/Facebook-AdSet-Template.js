@@ -955,6 +955,8 @@ class FacebookAdSetTemplate extends BaseTemplate {
           { field: "segments.date", dir: "ASC" },
         ],
       }] : []),
+      // Prune rows by default - users can set prune: false or pruneRows: false to see full results
+      ...(config.prune !== false && config.pruneRows !== false ? [{ use: "pruneRows", mode: "empty", as: "rows_meta" }] : []),
     ];
 
     return new this({

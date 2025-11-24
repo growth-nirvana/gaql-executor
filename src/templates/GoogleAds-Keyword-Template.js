@@ -695,6 +695,11 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
       });
     }
 
+    // Prune rows by default - users can set prune: false or pruneRows: false to see full results
+    if (config.prune !== false && config.pruneRows !== false) {
+      pipeline.push({ use: "pruneRows", mode: "empty", as: "rows_meta" });
+    }
+
     return new this({
       credentials,
       report,

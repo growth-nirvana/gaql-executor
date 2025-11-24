@@ -439,8 +439,15 @@ class FacebookAccountTemplate extends BaseTemplate {
       const [y, m, d] = str.split('-').map(Number);
       return new Date(Date.UTC(y, m - 1, d));
     };
-    const from = parseDate(fromDate);
-    const to = parseDate(toDate);
+    const formatDate = (date) => {
+      const y = date.getUTCFullYear();
+      const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(date.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+    
+    let from = parseDate(fromDate);
+    let to = parseDate(toDate);
     const daysDiff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
     
     // Smart granularity: daily for short periods, weekly for medium/long periods
@@ -454,6 +461,14 @@ class FacebookAccountTemplate extends BaseTemplate {
       } else if (config.granularity === 'weekly') {
         timeIncrement = 7;
         granularityLabel = 'weekly';
+      } else if (config.granularity === 'monthly') {
+        // Facebook API supports time_increment: 'monthly' which handles calendar months correctly
+        // Normalize date range to full calendar months for accurate monthly aggregation
+        from = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+        const lastDayOfMonth = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0));
+        to = lastDayOfMonth;
+        timeIncrement = 'monthly';
+        granularityLabel = 'monthly';
       }
     } else {
       if (daysDiff <= 7) {
@@ -468,8 +483,8 @@ class FacebookAccountTemplate extends BaseTemplate {
     const baseReport = this.getBaseAccountReport();
     const report = {
       ...baseReport,
-      from_date: fromDate,
-      to_date: toDate,
+      from_date: formatDate(from),
+      to_date: formatDate(to),
       ...(config.constraints && { constraints: config.constraints }),
       segments: ['segments.date', ...(baseReport.segments || [])],
       parameters: {
@@ -571,7 +586,7 @@ class FacebookAccountTemplate extends BaseTemplate {
     const baselineMode = config.baselineMode || "previous_period";
 
     const pipeline = [
-      { use: "periods", baseline: { mode: baselineMode } },
+      { use: "periods", baseline: { mode: baselineMode }, granularity: granularityLabel },
       ...loadCustomConversionsStep,
       { 
         use: 'actionsToColumns',
@@ -591,7 +606,7 @@ class FacebookAccountTemplate extends BaseTemplate {
         use: "group", 
         by: [
           ...attributes,
-          'segments.date',
+          'segments.date', // Always group by date for trends (Facebook returns monthly dates when time_increment='monthly')
         ],
         aggregates: {
           "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
@@ -616,7 +631,11 @@ class FacebookAccountTemplate extends BaseTemplate {
       { use: "applyActionLabels" },
       ...(config.includeTimePeriodDigest !== false ? [{
         use: "timePeriodDigest",
-        by: ['segments.date'], // Account level - just group by date
+        by: [
+          'segments.date',
+          // Include account.id and account.name for account-level digest
+          ...(attributes.includes('account.id') ? ['account.id', 'account.name'] : []),
+        ],
         aggregates: {
           "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
           "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },

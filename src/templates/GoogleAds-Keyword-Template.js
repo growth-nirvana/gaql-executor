@@ -595,17 +595,36 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
       const [y, m, d] = str.split('-').map(Number);
       return new Date(Date.UTC(y, m - 1, d));
     };
-    const from = parseDate(fromDate);
-    const to = parseDate(toDate);
+    const formatDate = (date) => {
+      const y = date.getUTCFullYear();
+      const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(date.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+    
+    let from = parseDate(fromDate);
+    let to = parseDate(toDate);
     const daysDiff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
+    
+    // For monthly granularity, normalize date range to full calendar months
+    if (config.granularity === 'monthly') {
+      from = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+      const lastDayOfMonth = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0));
+      to = lastDayOfMonth;
+    }
+    
+    // Determine granularity and select appropriate segment
+    const granularity = config.granularity || (daysDiff <= 7 ? 'daily' : 'weekly');
+    const dateSegment = granularity === 'monthly' ? 'segments.month' : 'segments.date';
+    const useTimeBucket = granularity === 'weekly';
     
     const baseReport = this.getBaseReport();
     const report = {
       ...baseReport,
-      from_date: fromDate,
-      to_date: toDate,
+      from_date: formatDate(from),
+      to_date: formatDate(to),
       ...(config.constraints && { constraints: config.constraints }),
-      segments: ['segments.date', ...(baseReport.segments || [])],
+      segments: [dateSegment, ...(baseReport.segments || [])],
     };
 
     const defaultAttributes = [
@@ -626,7 +645,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
     const baselineMode = config.baselineMode || "previous_period";
 
     const pipeline = [
-      { use: "periods", baseline: { mode: baselineMode } },
+      { use: "periods", baseline: { mode: baselineMode }, granularity: granularity },
       { use: "statusesReadable" },
       { use: "formatMicros", fields: ["metrics.cost_micros"] },
     ];
@@ -642,8 +661,15 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
       use: "group", 
       by: [
         ...attributes,
-        'segments.date',
+        ...(useTimeBucket ? [] : [dateSegment]), // Include dateSegment if not using timeBucket
       ],
+      ...(useTimeBucket ? {
+        timeBucket: {
+          field: "segments.date",
+          granularity: "WEEK",
+          as: "segments.date" // Overwrite segments.date with week-bucketed date
+        }
+      } : {}),
       aggregates: {
         "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
         "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
@@ -660,10 +686,24 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
       rollup: false,
       nulls: "include",
       orderBy: [
-        { field: "segments.date", dir: "ASC" },
+        { field: dateSegment, dir: "ASC" },
         { field: "ad_group_criterion.keyword.text", dir: "ASC" },
       ],
     });
+
+    // Normalize segments.month to segments.date for consistent output across all granularities
+    // This ensures segments.date always represents the start/anchor date of the period
+    if (granularity === 'monthly') {
+      pipeline.push({
+        use: "deriveDimension",
+        as: "segments.date",
+        rules: [], // No rules - always use default
+        default: (row) => {
+          // Copy segments.month to segments.date for consistent output
+          return row.segments?.month || null;
+        }
+      });
+    }
 
     if (filterConfig) {
       pipeline.push({ use: "filter", ...filterConfig });
@@ -673,8 +713,9 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
       pipeline.push({
         use: "timePeriodDigest",
         by: [
-          'segments.date',
-          ...(attributes.includes('customer.id') ? ['customer.id'] : []),
+          'segments.date', // Always use segments.date for consistent output (normalized from segments.month if monthly)
+          // Include customer.id and customer.descriptive_name if we have multiple customers (preserve customer dimension)
+          ...(attributes.includes('customer.id') ? ['customer.id', 'customer.descriptive_name'] : []),
         ],
         aggregates: {
           "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
@@ -690,7 +731,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
           "roas": { fn: "RATIO", num: "metrics.conversions_value", den: "metrics.cost", as: "metrics.roas" },
         },
         orderBy: [
-          { field: "segments.date", dir: "ASC" },
+          { field: dateSegment, dir: "ASC" },
         ],
       });
     }

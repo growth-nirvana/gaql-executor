@@ -56,7 +56,8 @@ function labelRange(fromIso, toIso) {
  * {
  *   baseline?: {
  *     mode?: "previous_period" | "previous_year" | "yoy" | "previous_month_same_span"
- *   }
+ *   },
+ *   granularity?: "daily" | "weekly" | "monthly" // Optional: time granularity for trends
  * }
  */
 function periodsStep(rows, cfg = {}, ctx) {
@@ -83,7 +84,7 @@ function periodsStep(rows, cfg = {}, ctx) {
     baseTo   = shiftYearClamp(t, -1);
 
   } else if (mode === "previous_month_same_span") {
-    // Same day-of-month as current.from, previous month, for L days (clamped to that month’s end)
+    // Same day-of-month as current.from, previous month, for L days (clamped to that month's end)
     baseFrom = shiftMonthClamp(f, -1);
     const candidateEnd = new Date(baseFrom.getTime() + (L - 1) * 86400000);
     const monthEnd = endOfMonthUTC(baseFrom);
@@ -127,6 +128,21 @@ function periodsStep(rows, cfg = {}, ctx) {
   };
 
   ctx.state.periods = periods;
+  
+  // Store granularity metadata if provided (for trends)
+  if (cfg.granularity && ctx?.state) {
+    ctx.state.envelopeData ||= {};
+    ctx.state.envelopeData.granularity = {
+      type: cfg.granularity,
+      date_field: "segments.date",
+      description: cfg.granularity === 'daily' 
+        ? "Daily data - segments.date represents each calendar day"
+        : cfg.granularity === 'weekly'
+        ? "Weekly data - segments.date represents the start of each week (Monday)"
+        : "Monthly data - segments.date represents the first day of each month"
+    };
+  }
+  
   return rows; // no shape change
 }
 

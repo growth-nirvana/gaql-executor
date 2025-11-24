@@ -904,12 +904,18 @@ class FacebookCampaignTemplate extends BaseTemplate {
       const [y, m, d] = str.split('-').map(Number);
       return new Date(Date.UTC(y, m - 1, d));
     };
-    const from = parseDate(fromDate);
-    const to = parseDate(toDate);
+    const formatDate = (date) => {
+      const y = date.getUTCFullYear();
+      const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+      const d = String(date.getUTCDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    };
+    
+    let from = parseDate(fromDate);
+    let to = parseDate(toDate);
     const daysDiff = Math.ceil((to - from) / (1000 * 60 * 60 * 24)) + 1;
     
     // Smart granularity: daily for short periods, weekly for medium/long periods
-    // Note: Facebook doesn't support monthly time_increment directly, so we use weekly for longer periods
     let timeIncrement = 1; // default daily
     let granularityLabel = 'daily';
     
@@ -922,10 +928,15 @@ class FacebookCampaignTemplate extends BaseTemplate {
         timeIncrement = 7;
         granularityLabel = 'weekly';
       } else if (config.granularity === 'monthly') {
-        // For monthly, we still use weekly (7) as Facebook doesn't support monthly time_increment
-        // The data will be weekly but can be interpreted as monthly trends
-        timeIncrement = 7;
-        granularityLabel = 'weekly'; // Actually weekly, but labeled for monthly interpretation
+        // Facebook API supports time_increment: 'monthly' which handles calendar months correctly
+        // Normalize date range to full calendar months for accurate monthly aggregation
+        // Start of first month
+        from = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth(), 1));
+        // End of last month (get last day of month)
+        const lastDayOfMonth = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() + 1, 0));
+        to = lastDayOfMonth;
+        timeIncrement = 'monthly';
+        granularityLabel = 'monthly';
       }
     } else {
       // Auto-determine based on date range
@@ -942,8 +953,8 @@ class FacebookCampaignTemplate extends BaseTemplate {
     const baseReport = this.getBaseCampaignReport();
     const report = {
       ...baseReport,
-      from_date: fromDate,
-      to_date: toDate,
+      from_date: formatDate(from),
+      to_date: formatDate(to),
       ...(config.constraints && { constraints: config.constraints }),
       // Always include date segment for trends
       segments: ['segments.date', ...(baseReport.segments || [])],
@@ -1063,7 +1074,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
 
     // Simplified pipeline for trends - focus on time-series data
     const pipeline = [
-      { use: "periods", baseline: { mode: baselineMode } },
+      { use: "periods", baseline: { mode: baselineMode }, granularity: granularityLabel },
       ...loadCustomConversionsStep,
       { 
         use: 'actionsToColumns',
@@ -1084,7 +1095,7 @@ class FacebookCampaignTemplate extends BaseTemplate {
         use: "group", 
         by: [
           ...attributes,
-          'segments.date', // Always group by date for trends
+          'segments.date', // Always group by date for trends (Facebook returns monthly dates when time_increment='monthly')
         ],
         aggregates: {
           "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
@@ -1116,8 +1127,8 @@ class FacebookCampaignTemplate extends BaseTemplate {
         use: "timePeriodDigest",
         by: [
           'segments.date', // Group by date only for digest
-          // Include account.id if we have multiple accounts (preserve account dimension)
-          ...(attributes.includes('account.id') ? ['account.id'] : []),
+          // Include account.id and account.name if we have multiple accounts (preserve account dimension)
+          ...(attributes.includes('account.id') ? ['account.id', 'account.name'] : []),
         ],
         aggregates: {
           "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },

@@ -250,12 +250,48 @@ class GAQLExecutor {
 
   overrideReportOptions(base, overrides = {}) {
     const result = this.clone(base) || {};
+    
     // Completely replace specified fields instead of merging
     for (const [key, value] of Object.entries(overrides)) {
       if (value !== undefined) {
         result[key] = value;
       }
     }
+    
+    // Check if this is a conversion action query AFTER merging (to catch segments from either source)
+    const isConversionActionQuery = 
+      (result.segments && Array.isArray(result.segments) && result.segments.includes('segments.conversion_action_name'));
+    
+    // Special handling: if segments.conversion_action_name is present, 
+    // ensure we ONLY have conversion-compatible metrics and NO constraints
+    if (isConversionActionQuery) {
+      const conversionMetrics = [
+        'metrics.conversions',
+        'metrics.conversions_value',
+        'metrics.all_conversions',
+        'metrics.all_conversions_value'
+      ];
+      // Only keep conversion-compatible metrics
+      if (result.metrics && Array.isArray(result.metrics)) {
+        result.metrics = result.metrics.filter(m => conversionMetrics.includes(m));
+        // If no compatible metrics found, use the conversion metrics
+        if (result.metrics.length === 0) {
+          result.metrics = conversionMetrics;
+        }
+      } else {
+        result.metrics = conversionMetrics;
+      }
+      // FORCE remove ALL constraints for conversion action queries
+      // The join keys will naturally filter to only matching rows, and constraints
+      // (especially metric constraints) can cause errors if the field isn't in the SELECT clause
+      result.constraints = [];
+      
+      // Also remove order/orderBy fields that reference metrics not in SELECT
+      // Google Ads API requires any field in ORDER BY to be in SELECT clause
+      result.order = undefined;
+      result.orderBy = undefined;
+    }
+    
     return result;
   }
 

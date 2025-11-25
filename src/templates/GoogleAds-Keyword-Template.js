@@ -45,6 +45,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
     };
 
     const filterConfig = this.calculateFilters(config);
+    const groupByAttributes = this.calculateGroupByAttributes(config);
 
     return new this({
       credentials,
@@ -53,15 +54,29 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
         { use: "periods", baseline: { mode: this.calculatePeriodsBaselineMode(config) } },
         { use: "statusesReadable" },
         { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+        // Preserve API values (like Facebook preserves conversions_api)
+        {
+          use: "derive",
+          add: {
+            // Always preserve original API values (rename from API response)
+            "metrics.conversions_api": (r) => r.metrics?.conversions ?? 0,
+            "metrics.conversions_value_api": (r) => r.metrics?.conversions_value ?? 0,
+            // Use API values as regular conversions (will be filtered from conversion_actions after enrichment)
+            "metrics.conversions": (r) => r.metrics?.conversions ?? 0,
+            "metrics.conversions_value": (r) => r.metrics?.conversions_value ?? 0
+          }
+        },
         { 
           use: "group", 
           by: [
-            ...this.calculateGroupByAttributes(config),
+            ...groupByAttributes,
           ],
           aggregates: {
             "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
             "metrics.clicks":      { fn: "SUM", as: "metrics.clicks" },
             "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+            "metrics.conversions_api": { fn: "SUM", as: "metrics.conversions_api" },
+            "metrics.conversions_value_api": { fn: "SUM", as: "metrics.conversions_value_api" },
             "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
             "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
             // derived
@@ -116,6 +131,74 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
           },
           policies: { pctOnZero: "null" }
         },
+        ...(this.calculatePostDeltaFilters(config) ? [{ use: "filter", ...this.calculatePostDeltaFilters(config) }] : []),
+        // Always add conversionActionsEnricher to show breakdown of all conversion actions
+        // (like Facebook - shows all actions in breakdown)
+        {
+          use: "conversionActionsEnricher",
+          report: {
+            entity: 'keyword_view',
+            // Use the same attributes as the main query for proper joining
+            attributes: groupByAttributes.filter(attr => !attr.startsWith('campaign_budget.')), // Exclude budget fields that might cause join issues
+            segments: ['segments.conversion_action_name'],
+            metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+            from_date: fromDate,
+            to_date: toDate,
+            constraints: report.constraints || []  // Use same constraints as main query
+          },
+          // Use customer.id, campaign.id, ad_group.id, and ad_group_criterion.criterion_id as primary join keys
+          joinKeys: ['customer.id', 'campaign.id', 'ad_group.id', 'ad_group_criterion.criterion_id'],
+          outputPath: 'conversion_actions',
+          aggregate: true
+        },
+        // Filter conversions from conversion_actions (like Facebook - uses conversionAggregates during grouping)
+        // Filter after enrichment so we have the breakdown, then set filtered values and recalculate derived metrics
+        ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+          ? [{
+              use: "derive",
+              add: {
+                // Sum filtered conversions from conversion_actions (like Facebook's SUM_EXPR)
+                "metrics.conversions": (r) => {
+                  const convActions = r.conversion_actions;
+                  if (convActions && convActions.conversion_actions && Array.isArray(convActions.conversion_actions)) {
+                    const normalizeActionName = (name) => String(name).toLowerCase().trim();
+                    const normalizedFilteredActions = config.conversionAction.map(normalizeActionName);
+                    return convActions.conversion_actions
+                      .filter(action => normalizedFilteredActions.includes(normalizeActionName(action.name)))
+                      .reduce((sum, action) => sum + (Number(action.conversions) || 0), 0);
+                  }
+                  return r.metrics?.conversions ?? 0;
+                },
+                "metrics.conversions_value": (r) => {
+                  const convActions = r.conversion_actions;
+                  if (convActions && convActions.conversion_actions && Array.isArray(convActions.conversion_actions)) {
+                    const normalizeActionName = (name) => String(name).toLowerCase().trim();
+                    const normalizedFilteredActions = (config.conversionValueAction || config.conversionAction).map(normalizeActionName);
+                    return convActions.conversion_actions
+                      .filter(action => normalizedFilteredActions.includes(normalizeActionName(action.name)))
+                      .reduce((sum, action) => sum + (Number(action.conversions_value) || 0), 0);
+                  }
+                  return r.metrics?.conversions_value ?? 0;
+                },
+                // Recalculate derived metrics with filtered conversions (like Facebook)
+                "metrics.cvr": (r) => {
+                  const clicks = r.metrics?.clicks ?? 0;
+                  const conversions = r.metrics?.conversions ?? 0;
+                  return clicks > 0 ? conversions / clicks : null;
+                },
+                "metrics.cpa": (r) => {
+                  const cost = r.metrics?.cost ?? 0;
+                  const conversions = r.metrics?.conversions ?? 0;
+                  return conversions > 0 ? cost / conversions : null;
+                },
+                "metrics.roas": (r) => {
+                  const cost = r.metrics?.cost ?? 0;
+                  const conversionsValue = r.metrics?.conversions_value ?? 0;
+                  return cost > 0 ? conversionsValue / cost : null;
+                }
+              }
+            }]
+          : []),
         {
           use: "derive",
           prefix: "diagnostics",     // everything lands under diagnostics.*
@@ -338,6 +421,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions",
           ],
           excludeRollup: true,
           as: "top_n_cpa_worseners_by_impact",
@@ -372,6 +456,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions",
           ],
           excludeRollup: true,
           as: "top_n_cpa_improvers_by_impact",
@@ -406,6 +491,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions",
           ],
           excludeRollup: true,
           as: "top_n_cvr_drops_by_impact",
@@ -440,6 +526,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions",
           ],
           excludeRollup: true,
           as: "top_n_cvr_improvers_by_impact",
@@ -474,6 +561,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions",
           ],
           excludeRollup: true,
           as: "top_n_cpc_rises_by_impact",
@@ -506,6 +594,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
             "metrics_prev.cvr",
             "metrics_prev.cpa",
             "metrics_prev.cost_share",
+            "conversion_actions",
           ],
           excludeRollup: true,
           as: "top_n_cpc_falls_by_impact",
@@ -516,6 +605,7 @@ class GoogleAdsKeywordTemplate extends BaseTemplate {
           rollupKey: "meta.rollup_key",
           rollupValue: "ACCOUNT",
           copyFromFirst: ["customer.id", "customer.descriptive_name"],
+          aggregateConversionActions: true,
         
           // 1) Sum bases for current + previous
           sum: [

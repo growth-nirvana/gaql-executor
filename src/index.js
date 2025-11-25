@@ -21,6 +21,10 @@ const { TikTokExecutor } = require('./tiktok/executor');
 const { TikTokAccountTemplate } = require('./templates/TikTok-Account-Template');
 const { TikTokCampaignTemplate } = require('./templates/TikTok-Campaign-Template');
 const { GoogleAdsChangeEventTemplate } = require('./templates/GoogleAds-ChangeEvent-Template');
+const { GA4Executor } = require('./ga4/ga4-executor');
+const { GA4EventTemplate } = require('./templates/GA4-Event-Template');
+const { GA4PageTemplate } = require('./templates/GA4-Page-Template');
+const { GA4TrafficTemplate } = require('./templates/GA4-Traffic-Template');
 const { toCsv, resultsToCsv, writeCsv, flattenObject } = require('./utils/csv-exporter');
 
 // Main library entry point
@@ -44,6 +48,11 @@ module.exports = {
   TikTokExecutor,
   TikTokAccountTemplate,
   TikTokCampaignTemplate,
+  // GA4
+  GA4Executor,
+  GA4EventTemplate,
+  GA4PageTemplate,
+  GA4TrafficTemplate,
   // CSV utilities
   toCsv,
   resultsToCsv,

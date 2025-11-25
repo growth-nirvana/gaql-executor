@@ -62,6 +62,7 @@ function rollupEnvelopeStep(rows, cfg = {}, ctx) {
     expressions = {},
     copyFromFirst = [],
     excludeRollupRows = true,
+    aggregateConversionActions = false,
   } = cfg;
 
   if (!as) throw new Error("rollupEnvelopeStep: 'as' (envelope key) is required.");
@@ -171,6 +172,88 @@ function rollupEnvelopeStep(rows, cfg = {}, ctx) {
     const den = safeNumber(getAtPath(summary, r.den));
     const val = den === 0 ? null : num / den;
     setAtPath(summary, r.as || `${r.num}_per_${r.den}`, val);
+  }
+
+  // 4b) Aggregate conversion_actions if requested
+  if (aggregateConversionActions) {
+    const actionMap = new Map(); // Map of action name -> aggregated metrics
+    let totalConversions = 0;
+    let totalConversionsValue = 0;
+    let totalAllConversions = 0;
+    let totalAllConversionsValue = 0;
+    
+    // Get filtered conversion actions from config (if any)
+    const filteredActions = cfg.filteredConversionActions || null;
+    const normalizeActionName = (name) => String(name).toLowerCase().trim();
+    const normalizedFilteredActions = filteredActions 
+      ? filteredActions.map(normalizeActionName)
+      : null;
+
+    for (const row of scan) {
+      const convActions = getAtPath(row, 'conversion_actions');
+      if (convActions && convActions.conversion_actions && Array.isArray(convActions.conversion_actions)) {
+        // Aggregate ALL individual actions (like Facebook - show all in breakdown)
+        for (const action of convActions.conversion_actions) {
+          const actionName = action.name;
+          const normalizedActionName = normalizeActionName(actionName);
+          
+          // Always include all actions in the breakdown (like Facebook)
+          if (!actionMap.has(actionName)) {
+            actionMap.set(actionName, {
+              name: actionName,
+              conversions: 0,
+              conversions_value: 0,
+              all_conversions: 0,
+              all_conversions_value: 0
+            });
+          }
+          const aggregated = actionMap.get(actionName);
+          aggregated.conversions += safeNumber(action.conversions || 0);
+          aggregated.conversions_value += safeNumber(action.conversions_value || 0);
+          aggregated.all_conversions += safeNumber(action.all_conversions || 0);
+          aggregated.all_conversions_value += safeNumber(action.all_conversions_value || 0);
+          
+          // Only accumulate totals from filtered actions (for metrics.conversions/conversions_value)
+          if (!normalizedFilteredActions || normalizedFilteredActions.includes(normalizedActionName)) {
+            totalConversions += safeNumber(action.conversions || 0);
+            totalConversionsValue += safeNumber(action.conversions_value || 0);
+          }
+          
+          // Always accumulate all_conversions totals
+          totalAllConversions += safeNumber(action.all_conversions || 0);
+          totalAllConversionsValue += safeNumber(action.all_conversions_value || 0);
+        }
+      }
+      
+      // If NO filtering, use totals from conversion_actions structure
+      // (When filtering IS enabled, we already summed from conversion_actions array above, so don't double-count)
+      if (!filteredActions || filteredActions.length === 0) {
+        const convActions = getAtPath(row, 'conversion_actions');
+        if (convActions) {
+          totalConversions += safeNumber(convActions.total_conversions || 0);
+          totalConversionsValue += safeNumber(convActions.total_conversions_value || 0);
+        }
+      }
+      // When filtering is enabled, we ONLY sum from conversion_actions array (already done above)
+      // Don't sum from row.metrics.conversions because those are already filtered and would double-count
+    }
+
+    if (actionMap.size > 0 || totalConversions > 0) {
+      setAtPath(summary, 'conversion_actions', {
+        total_conversions: totalConversions,
+        total_conversions_value: totalConversionsValue,
+        total_all_conversions: totalAllConversions,
+        total_all_conversions_value: totalAllConversionsValue,
+        conversion_actions: Array.from(actionMap.values()).sort((a, b) => b.conversions - a.conversions)
+      });
+    }
+    
+    // When filtering is enabled, override the summed metrics.conversions/conversions_value
+    // with the filtered totals (like Facebook - shows all actions but uses filtered for metrics)
+    if (filteredActions && filteredActions.length > 0) {
+      setAtPath(summary, 'metrics.conversions', totalConversions);
+      setAtPath(summary, 'metrics.conversions_value', totalConversionsValue);
+    }
   }
 
   // 5) Extra expressions (post-compute on the summary object)

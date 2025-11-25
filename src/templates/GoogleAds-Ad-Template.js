@@ -27,8 +27,8 @@ class GoogleAdsAdTemplate extends BaseTemplate {
         'metrics.cost_micros',
         'metrics.clicks',
         'metrics.impressions',
-        'metrics.conversions',
-        'metrics.conversions_value',
+        'metrics.conversions_api',  // API conversions field (will be renamed/used based on conversionAction)
+        'metrics.conversions_value_api'  // API conversion_values field (will be renamed/used based on conversionAction)
       ]
     }
   }
@@ -41,6 +41,7 @@ class GoogleAdsAdTemplate extends BaseTemplate {
     };
 
     const filterConfig = this.calculateFilters(config);
+    const groupByAttributes = this.calculateGroupByAttributes(config);
 
     return new this({
       credentials,
@@ -49,15 +50,54 @@ class GoogleAdsAdTemplate extends BaseTemplate {
         { use: "periods", baseline: { mode: this.calculatePeriodsBaselineMode(config) } },
         { use: "statusesReadable" },
         { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+        // Preserve API values and set up conversions/conversions_value based on conversionAction config
+        {
+          use: "derive",
+          add: {
+            // Always preserve API values
+            "metrics.conversions_api": (r) => r.metrics?.conversions_api ?? 0,
+            "metrics.conversions_value_api": (r) => r.metrics?.conversions_value_api ?? 0,
+            // If conversionAction is NOT specified, use API values as regular conversions
+            // If conversionAction IS specified, filterConversionActions will overwrite these
+            "metrics.conversions": (r) => {
+              if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
+                // Will be overwritten by filterConversionActions
+                return 0;
+              }
+              return r.metrics?.conversions_api ?? 0;
+            },
+            "metrics.conversions_value": (r) => {
+              if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
+                // Will be overwritten by filterConversionActions
+                return 0;
+              }
+              return r.metrics?.conversions_value_api ?? 0;
+            }
+          }
+        },
+        // Filter conversion actions if specified (runs before grouping)
+        ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+          ? [{
+              use: "filterConversionActions",
+              conversionActions: config.conversionAction,
+              conversionValueActions: config.conversionValueAction || config.conversionAction,
+              groupByAttributes: groupByAttributes,
+              report: report,
+              fromDate: fromDate,
+              toDate: toDate
+            }]
+          : []),
         { 
           use: "group", 
           by: [
-            ...this.calculateGroupByAttributes(config),
+            ...groupByAttributes,
           ],
           aggregates: {
             "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
             "metrics.clicks":      { fn: "SUM", as: "metrics.clicks" },
             "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+            "metrics.conversions_api": { fn: "SUM", as: "metrics.conversions_api" },
+            "metrics.conversions_value_api": { fn: "SUM", as: "metrics.conversions_value_api" },
             "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
             "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
             // derived
@@ -111,21 +151,25 @@ class GoogleAdsAdTemplate extends BaseTemplate {
           },
           policies: { pctOnZero: "null" }
         },
-        // {
-        //   use: "conversionActionsEnricher",
-        //   report: {
-        //     entity: 'campaign',
-        //     attributes: ['customer.id', 'customer.descriptive_name', 'campaign.id', 'campaign.name'],
-        //     segments: ['segments.conversion_action_name'],
-        //     metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
-        //     from_date: fromDate,
-        //     to_date: toDate,
-        //     constraints: []  // Empty constraints for segment compatibility
-        //   },
-        //   joinKeys: ['customer.id', 'campaign.id'],
-        //   outputPath: 'conversion_actions',
-        //   aggregate: true
-        // },
+        // Only add conversionActionsEnricher if conversionAction is NOT specified
+        // (if conversionAction is specified, filterConversionActions already handles it)
+        ...(!config.conversionAction || !Array.isArray(config.conversionAction) || config.conversionAction.length === 0
+          ? [{
+              use: "conversionActionsEnricher",
+              report: {
+                entity: 'ad_group_ad',
+                attributes: groupByAttributes.filter(attr => !attr.startsWith('campaign_budget.')),
+                segments: ['segments.conversion_action_name'],
+                metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+                from_date: fromDate,
+                to_date: toDate,
+                constraints: report.constraints || []
+              },
+              joinKeys: ['customer.id', 'ad_group_ad.ad.id'],
+              outputPath: 'conversion_actions',
+              aggregate: true
+            }]
+          : []),
         {
           use: "derive",
           prefix: "diagnostics",     // everything lands under diagnostics.*
@@ -660,6 +704,43 @@ class GoogleAdsAdTemplate extends BaseTemplate {
       { use: "periods", baseline: { mode: baselineMode }, granularity: granularity },
       { use: "statusesReadable" },
       { use: "formatMicros", fields: ["metrics.cost_micros"] },
+      // Preserve API values and set up conversions/conversions_value based on conversionAction config
+      {
+        use: "derive",
+        add: {
+          // Always preserve API values
+          "metrics.conversions_api": (r) => r.metrics?.conversions_api ?? 0,
+          "metrics.conversions_value_api": (r) => r.metrics?.conversions_value_api ?? 0,
+          // If conversionAction is NOT specified, use API values as regular conversions
+          // If conversionAction IS specified, filterConversionActions will overwrite these
+          "metrics.conversions": (r) => {
+            if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
+              // Will be overwritten by filterConversionActions
+              return 0;
+            }
+            return r.metrics?.conversions_api ?? 0;
+          },
+          "metrics.conversions_value": (r) => {
+            if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
+              // Will be overwritten by filterConversionActions
+              return 0;
+            }
+            return r.metrics?.conversions_value_api ?? 0;
+          }
+        }
+      },
+      // Filter conversion actions if specified (runs before grouping)
+      ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+        ? [{
+            use: "filterConversionActions",
+            conversionActions: config.conversionAction,
+            conversionValueActions: config.conversionValueAction || config.conversionAction,
+            groupByAttributes: attributes,
+            report: report,
+            fromDate: formatDate(from),
+            toDate: formatDate(to)
+          }]
+        : []),
     ];
 
     const derivedDimensions = this.calculateDerivedDimensions(config);
@@ -686,6 +767,8 @@ class GoogleAdsAdTemplate extends BaseTemplate {
         "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
         "metrics.clicks": { fn: "SUM", as: "metrics.clicks" },
         "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+        "metrics.conversions_api": { fn: "SUM", as: "metrics.conversions_api" },
+        "metrics.conversions_value_api": { fn: "SUM", as: "metrics.conversions_value_api" },
         "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
         "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
         "cost": { fn: "MICROS_TO_UNITS", src: "metrics.cost_micros", as: "metrics.cost" },

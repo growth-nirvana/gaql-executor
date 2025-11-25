@@ -19,8 +19,8 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
         'metrics.cost_micros',
         'metrics.clicks',
         'metrics.impressions',
-        'metrics.conversions',
-        'metrics.conversions_value'
+        'metrics.conversions',  // API conversions field (will be preserved as conversions_api, then filtered if needed)
+        'metrics.conversions_value'  // API conversion_values field (will be preserved as conversions_value_api, then filtered if needed)
       ],
       // segments: [],  // Configure via config.segments if needed
       constraints: [
@@ -39,23 +39,38 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
     };
 
     const filterConfig = this.calculateFilters(config);
+    const groupByAttributes = this.calculateGroupByAttributes(config);
 
-    return new this({
+    const templateConfig = {
       credentials,
       report,
       pipeline: [
         { use: "periods", baseline: { mode: this.calculatePeriodsBaselineMode(config) } },
         { use: "statusesReadable" },
         { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+        // Preserve API values (like Facebook preserves conversions_api)
+        {
+          use: "derive",
+          add: {
+            // Always preserve original API values (rename from API response)
+            "metrics.conversions_api": (r) => r.metrics?.conversions ?? 0,
+            "metrics.conversions_value_api": (r) => r.metrics?.conversions_value ?? 0,
+            // Use API values as regular conversions (will be filtered from conversion_actions after enrichment)
+            "metrics.conversions": (r) => r.metrics?.conversions ?? 0,
+            "metrics.conversions_value": (r) => r.metrics?.conversions_value ?? 0
+          }
+        },
         { 
           use: "group", 
           by: [
-            ...this.calculateGroupByAttributes(config),
+            ...groupByAttributes,
           ],
           aggregates: {
             "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
             "metrics.clicks":      { fn: "SUM", as: "metrics.clicks" },
             "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+            "metrics.conversions_api": { fn: "SUM", as: "metrics.conversions_api" },
+            "metrics.conversions_value_api": { fn: "SUM", as: "metrics.conversions_value_api" },
             "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
             "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
             // derived
@@ -110,21 +125,73 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
           policies: { pctOnZero: "null" }
         },
         ...(this.calculatePostDeltaFilters(config) ? [{ use: "filter", ...this.calculatePostDeltaFilters(config) }] : []),
+        // Always add conversionActionsEnricher to show breakdown of all conversion actions
+        // (like Facebook - shows all actions in breakdown)
         {
           use: "conversionActionsEnricher",
           report: {
             entity: 'campaign',
-            attributes: ['customer.id', 'customer.descriptive_name', 'campaign.id', 'campaign.name'],
+            // Use the same attributes as the main query for proper joining
+            attributes: groupByAttributes.filter(attr => !attr.startsWith('campaign_budget.')), // Exclude budget fields that might cause join issues
             segments: ['segments.conversion_action_name'],
             metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
             from_date: fromDate,
             to_date: toDate,
-            constraints: []  // Empty constraints for segment compatibility
+            constraints: report.constraints || []  // Use same constraints as main query
           },
+          // Use customer.id and campaign.id as primary join keys (these are always present)
           joinKeys: ['customer.id', 'campaign.id'],
           outputPath: 'conversion_actions',
           aggregate: true
         },
+        // Filter conversions from conversion_actions (like Facebook - uses conversionAggregates during grouping)
+        // Filter after enrichment so we have the breakdown, then set filtered values and recalculate derived metrics
+        ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+          ? [{
+              use: "derive",
+              add: {
+                // Sum filtered conversions from conversion_actions (like Facebook's SUM_EXPR)
+                "metrics.conversions": (r) => {
+                  const convActions = r.conversion_actions;
+                  if (convActions && convActions.conversion_actions && Array.isArray(convActions.conversion_actions)) {
+                    const normalizeActionName = (name) => String(name).toLowerCase().trim();
+                    const normalizedFilteredActions = config.conversionAction.map(normalizeActionName);
+                    return convActions.conversion_actions
+                      .filter(action => normalizedFilteredActions.includes(normalizeActionName(action.name)))
+                      .reduce((sum, action) => sum + (Number(action.conversions) || 0), 0);
+                  }
+                  return r.metrics?.conversions ?? 0;
+                },
+                "metrics.conversions_value": (r) => {
+                  const convActions = r.conversion_actions;
+                  if (convActions && convActions.conversion_actions && Array.isArray(convActions.conversion_actions)) {
+                    const normalizeActionName = (name) => String(name).toLowerCase().trim();
+                    const normalizedFilteredActions = (config.conversionValueAction || config.conversionAction).map(normalizeActionName);
+                    return convActions.conversion_actions
+                      .filter(action => normalizedFilteredActions.includes(normalizeActionName(action.name)))
+                      .reduce((sum, action) => sum + (Number(action.conversions_value) || 0), 0);
+                  }
+                  return r.metrics?.conversions_value ?? 0;
+                },
+                // Recalculate derived metrics with filtered conversions (like Facebook)
+                "metrics.cvr": (r) => {
+                  const clicks = r.metrics?.clicks ?? 0;
+                  const conversions = r.metrics?.conversions ?? 0;
+                  return clicks > 0 ? conversions / clicks : null;
+                },
+                "metrics.cpa": (r) => {
+                  const cost = r.metrics?.cost ?? 0;
+                  const conversions = r.metrics?.conversions ?? 0;
+                  return conversions > 0 ? cost / conversions : null;
+                },
+                "metrics.roas": (r) => {
+                  const cost = r.metrics?.cost ?? 0;
+                  const conversionsValue = r.metrics?.conversions_value ?? 0;
+                  return cost > 0 ? conversionsValue / cost : null;
+                }
+              }
+            }]
+          : []),
         {
           use: "derive",
           prefix: "diagnostics",     // everything lands under diagnostics.*
@@ -347,6 +414,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpa_worseners_by_impact",
@@ -381,6 +449,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpa_improvers_by_impact",
@@ -415,6 +484,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cvr_drops_by_impact",
@@ -449,6 +519,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cvr_improvers_by_impact",
@@ -483,6 +554,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpc_rises_by_impact",
@@ -515,6 +587,7 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics_prev.cvr",
             "metrics_prev.cpa",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpc_falls_by_impact",
@@ -531,6 +604,13 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
             "metrics.cost","metrics.clicks","metrics.impressions","metrics.conversions","metrics.conversions_value",
             "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value"
           ],
+          
+          // Aggregate conversion_actions across all rows
+          aggregateConversionActions: true,
+          // Pass filtered conversion actions to rollup so it uses filtered metrics
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         
           // 2) Compute ratios from summed bases (never average ratios)
           ratios: [
@@ -594,7 +674,9 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
         mode: "envelope",
         include: ["periods"],
       }
-    });
+    };
+
+    return new this(templateConfig);
   }
 
   // Lookup method with date segments for trend analysis
@@ -617,6 +699,16 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
     const pipeline = [
       { use: "statusesReadable" },
       { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+      // Preserve API values and copy to regular conversions fields
+      {
+        use: "derive",
+        add: {
+          "metrics.conversions_api": (r) => r.metrics?.conversions ?? 0,
+          "metrics.conversions_value_api": (r) => r.metrics?.conversions_value ?? 0,
+          "metrics.conversions": (r) => r.metrics?.conversions ?? 0,
+          "metrics.conversions_value": (r) => r.metrics?.conversions_value ?? 0
+        }
+      },
     ];
 
     // Add derived dimension steps if configured (before grouping)
@@ -639,6 +731,8 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
         "metrics.cost_micros": { fn: "SUM", as: "metrics.cost_micros" },
         "metrics.clicks":      { fn: "SUM", as: "metrics.clicks" },
         "metrics.impressions": { fn: "SUM", as: "metrics.impressions" },
+        "metrics.conversions_api": { fn: "SUM", as: "metrics.conversions_api" },
+        "metrics.conversions_value_api": { fn: "SUM", as: "metrics.conversions_value_api" },
         "metrics.conversions": { fn: "SUM", as: "metrics.conversions" },
         "metrics.conversions_value": { fn: "SUM", as: "metrics.conversions_value" },
         // derived metrics
@@ -768,14 +862,53 @@ class GoogleAdsCampaignTemplate extends BaseTemplate {
     const useTimeBucket = granularity === 'weekly';
     const timeBucketGranularity = 'WEEK';
 
+    // Add derived dimension steps if configured
+    const derivedDimensions = this.calculateDerivedDimensions(config);
+
     const pipeline = [
       { use: "periods", baseline: { mode: baselineMode }, granularity: granularity },
       { use: "statusesReadable" },
       { use: "formatMicros", fields: ["metrics.cost_micros", "campaign_budget.amount_micros", "campaign_budget.recommended_budget_amount_micros"] },
+      // Preserve API values and set up conversions/conversions_value based on conversionAction config
+      {
+        use: "derive",
+        add: {
+          // Always preserve original API values (rename from API response)
+          "metrics.conversions_api": (r) => r.metrics?.conversions ?? 0,
+          "metrics.conversions_value_api": (r) => r.metrics?.conversions_value ?? 0,
+          // If conversionAction is NOT specified, use API values as regular conversions
+          // If conversionAction IS specified, filterConversionActions will overwrite these
+          "metrics.conversions": (r) => {
+            if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
+              // Will be overwritten by filterConversionActions
+              return 0;
+            }
+            return r.metrics?.conversions ?? 0;
+          },
+          "metrics.conversions_value": (r) => {
+            if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
+              // Will be overwritten by filterConversionActions
+              return 0;
+            }
+            return r.metrics?.conversions_value ?? 0;
+          }
+        }
+      },
+      // Filter conversion actions if specified (runs before grouping)
+      ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+        ? [{
+            use: "filterConversionActions",
+            conversionActions: config.conversionAction,
+            conversionValueActions: config.conversionValueAction || config.conversionAction,
+            groupByAttributes: attributes,
+            report: report,
+            fromDate: formatDate(from),
+            toDate: formatDate(to)
+          }]
+        : []),
     ];
 
     // Add derived dimension steps if configured
-    const derivedDimensions = this.calculateDerivedDimensions(config);
     if (derivedDimensions) {
       for (const derivedDim of derivedDimensions) {
         pipeline.push({ use: "deriveDimension", ...derivedDim });

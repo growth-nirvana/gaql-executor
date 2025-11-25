@@ -47,8 +47,17 @@ async function enrichWithConversionActions(rows, cfg = {}, ctx) {
     return rows;
   }
 
+  // Remove all constraints from the conversion actions query
+  // The join keys will naturally filter to only matching rows, and constraints
+  // (especially metric constraints) can cause errors if the field isn't in the SELECT clause
+  // overrideReportOptions will handle removing constraints when segments.conversion_action_name is present
+  const cleanedReport = {
+    ...cfg.report,
+    constraints: [] // Remove all constraints - join keys handle filtering
+  };
+
   // Make the API call to get conversion action data
-  const conversionData = await ctx.fetch(cfg.report, 'conversion_actions');
+  const conversionData = await ctx.fetch(cleanedReport, 'conversion_actions');
   
   // Group conversion data by join keys
   const conversionIndex = new Map();
@@ -94,11 +103,11 @@ async function enrichWithConversionActions(rows, cfg = {}, ctx) {
         const allConversions = Number(getAtPath(conv, 'metrics.all_conversions')) || 0;
         const allConversionsValue = Number(getAtPath(conv, 'metrics.all_conversions_value')) || 0;
         
-        aggregated.total_conversions += conversions;
-        aggregated.total_conversions_value += conversionsValue;
+        aggregated.total_conversions += allConversions;
+        aggregated.total_conversions_value += allConversionsValue;
         aggregated.conversion_actions.push({
           name: actionName,
-          conversions,
+          conversions: conversions,
           conversions_value: conversionsValue,
           all_conversions: allConversions,
           all_conversions_value: allConversionsValue

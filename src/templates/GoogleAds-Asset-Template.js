@@ -114,6 +114,32 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
           naming: "flat",
           includeRollup: false,
         },
+        // Store conversionActionsEnricher config before delta runs (delta needs it for previous period)
+        // Also store conversionActionFilterCfg if conversionAction is configured
+        // The actual enrichment/filtering happens later, but delta needs the config now
+        ...(groupByAttributes ? [{
+          use: "storeConversionActionsCfg",
+          report: {
+            entity: 'asset_group_asset',
+            attributes: groupByAttributes,
+            segments: ['segments.conversion_action_name'],
+            metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+            from_date: fromDate,
+            to_date: toDate,
+            constraints: report.constraints || []
+          },
+          joinKeys: ['customer.id', 'campaign.id', 'asset_group.id', 'asset_group_asset.asset'],
+          outputPath: 'conversion_actions',
+          aggregate: true,
+          fromDate: fromDate,
+          toDate: toDate,
+          // Also pass conversionAction config if specified
+          ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0 ? {
+            conversionActions: config.conversionAction,
+            conversionValueActions: config.conversionValueAction || config.conversionAction,
+            groupByAttributes: groupByAttributes
+          } : {})
+        }] : []),
         {
           use: "delta",
           baseline: { mode: this.calculateBaselineMode(config) },
@@ -428,10 +454,15 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
-            "conversion_actions",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpa_worseners_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -463,10 +494,15 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
-            "conversion_actions",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpa_improvers_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -498,10 +534,15 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
-            "conversion_actions",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cvr_drops_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -533,10 +574,15 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
-            "conversion_actions",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cvr_improvers_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -568,10 +614,15 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
-            "conversion_actions",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpc_rises_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -603,15 +654,24 @@ class GoogleAdsAssetTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
-            "conversion_actions",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpc_falls_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         {
           use: "rollupEnvelope",
           as: "rollup",
           aggregateConversionActions: true,
+          // Pass filtered conversion actions to rollup so it uses filtered metrics
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
           sum: [
             "metrics.cost","metrics.clicks","metrics.impressions","metrics.conversions","metrics.conversions_value",
             "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value",

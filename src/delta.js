@@ -1,6 +1,8 @@
 // delta.js
 const { groupRows } = require("./group-by");
 const { applyActionLabelsStep } = require("./fb/apply-action-labels-step");
+const { filterConversionActions } = require("./google-ads/filter-conversion-actions");
+const { enrichWithConversionActions } = require("./google-ads/conversion-actions-enricher");
 
 // ----- tiny path utils -----
 function getAtPath(obj, path) {
@@ -146,8 +148,164 @@ async function deltaAugment(rows, cfg = {}, ctx) {
 
   // 3) fetch & group previous
   const prevRaw      = await ctx.fetch({ from_date: baseline.from_date, to_date: baseline.to_date }, "previous");
+  
+  // CRITICAL: Update stored filterConversionActions config with baseline dates
+  // This ensures filterConversionActions (which runs in runPre) uses the correct previous period dates
+  // WITHOUT mutating ctx.options.report which would affect other steps like periods
+  const originalFilterDates = {
+    fromDate: ctx?.state?.conversionActionFilterCfg?.fromDate,
+    toDate: ctx?.state?.conversionActionFilterCfg?.toDate
+  };
+  
+  if (ctx?.state?.conversionActionFilterCfg) {
+    ctx.state.conversionActionFilterCfg.fromDate = baseline.from_date;
+    ctx.state.conversionActionFilterCfg.toDate = baseline.to_date;
+  }
+  
   const prevNorm     = await ctx.runPre(prevRaw);
-  const prevGrouped  = gcfg ? groupRows(prevNorm, gcfg) : prevNorm;
+  
+  // Restore original dates in stored config (for next iteration if any)
+  if (ctx?.state?.conversionActionFilterCfg && originalFilterDates.fromDate && originalFilterDates.toDate) {
+    ctx.state.conversionActionFilterCfg.fromDate = originalFilterDates.fromDate;
+    ctx.state.conversionActionFilterCfg.toDate = originalFilterDates.toDate;
+  }
+  
+  // filterConversionActions runs automatically in runPre (it's in "pre" phase)
+  // Since we set report dates to baseline before runPre, it will filter previous period correctly
+  // No need to manually call it here - runPre already did it
+  const prevWithConversionFilter = prevNorm;
+  
+  // Apply conversion actions enricher to previous period if it was applied to current period
+  // This creates conversion_actions_prev for the previous period breakdown
+  const conversionActionsEnricherCfg = ctx?.state?.conversionActionsEnricherCfg;
+  
+  let prevWithConversionActions = prevWithConversionFilter;
+  if (conversionActionsEnricherCfg) {
+    // Apply the same conversion actions enrichment but with previous period dates
+    // Store as conversion_actions_prev instead of conversion_actions
+    prevWithConversionActions = await enrichWithConversionActions(prevWithConversionFilter, {
+      report: conversionActionsEnricherCfg.report,
+      joinKeys: conversionActionsEnricherCfg.joinKeys,
+      outputPath: 'conversion_actions_prev', // Store as _prev for previous period
+      aggregate: conversionActionsEnricherCfg.aggregate,
+      fromDate: baseline.from_date,
+      toDate: baseline.to_date
+    }, ctx);
+  }
+  
+  // Group previous period rows (after filtering, so grouped metrics.conversions will be filtered)
+  let prevGrouped = gcfg ? groupRows(prevWithConversionActions, gcfg) : prevWithConversionActions;
+  
+  // After grouping, aggregate conversion_actions_prev from ungrouped rows
+  // because grouping doesn't preserve non-aggregated object fields
+  if (gcfg && prevWithConversionActions.length > 0 && prevWithConversionActions.some(r => r.conversion_actions_prev)) {
+    // Use grouping config keys (gcfg.by) instead of delta keys for matching ungrouped rows
+    const groupKeys = Array.isArray(gcfg.by) ? gcfg.by : [];
+    if (gcfg.timeBucket && gcfg.timeBucket.field) {
+      const tbKey = gcfg.timeBucket.as || "timeBucket";
+      groupKeys.push(tbKey);
+    }
+    
+    // Group ungrouped rows by grouping config keys to aggregate conversion_actions_prev
+    const prevActionsByGroup = new Map();
+    
+    for (const row of prevWithConversionActions) {
+      if (!row.conversion_actions_prev) continue;
+      
+      // Use grouping keys, not delta keys, to match ungrouped rows
+      const groupKey = keyFromRow(row, groupKeys);
+      if (!prevActionsByGroup.has(groupKey)) {
+        prevActionsByGroup.set(groupKey, {
+          actionMap: new Map(),
+          totalConversions: 0,
+          totalConversionsValue: 0,
+          totalAllConversions: 0,
+          totalAllConversionsValue: 0
+        });
+      }
+      
+      const group = prevActionsByGroup.get(groupKey);
+      const convActions = row.conversion_actions_prev.conversion_actions || [];
+      
+      for (const action of convActions) {
+        const actionName = action.name;
+        if (!group.actionMap.has(actionName)) {
+          group.actionMap.set(actionName, {
+            name: actionName,
+            conversions: 0,
+            conversions_value: 0,
+            all_conversions: 0,
+            all_conversions_value: 0
+          });
+        }
+        const agg = group.actionMap.get(actionName);
+        agg.conversions += Number(action.conversions || 0);
+        agg.conversions_value += Number(action.conversions_value || 0);
+        agg.all_conversions += Number(action.all_conversions || 0);
+        agg.all_conversions_value += Number(action.all_conversions_value || 0);
+      }
+      
+      group.totalConversions += Number(row.conversion_actions_prev.total_conversions || 0);
+      group.totalConversionsValue += Number(row.conversion_actions_prev.total_conversions_value || 0);
+      group.totalAllConversions += Number(row.conversion_actions_prev.total_all_conversions || 0);
+      group.totalAllConversionsValue += Number(row.conversion_actions_prev.total_all_conversions_value || 0);
+    }
+    
+    // Attach aggregated conversion_actions_prev to grouped rows using delta keys for matching
+    prevGrouped = prevGrouped.map(row => {
+      const groupKey = keyFromRow(row, groupKeys); // Use same keys as ungrouped rows
+      const group = prevActionsByGroup.get(groupKey);
+      if (group && (group.actionMap.size > 0 || group.totalConversions > 0)) {
+        return {
+          ...row,
+          conversion_actions_prev: {
+            total_conversions: group.totalConversions,
+            total_conversions_value: group.totalConversionsValue,
+            total_all_conversions: group.totalAllConversions,
+            total_all_conversions_value: group.totalAllConversionsValue,
+            conversion_actions: Array.from(group.actionMap.values()).sort((a, b) => b.conversions - a.conversions)
+          }
+        };
+      }
+      return row;
+    });
+    
+    // Enrich any grouped rows that don't have conversion_actions_prev
+    // (this can happen if grouping keys don't match or if enrichment failed)
+    // CRITICAL: Use groupKeys (not joinKeys) to match grouped rows, since grouped rows
+    // are keyed by the group step's 'by' fields, not the enricher's joinKeys
+    const conversionActionsEnricherCfg = ctx?.state?.conversionActionsEnricherCfg;
+    if (conversionActionsEnricherCfg && groupKeys.length > 0) {
+      const rowsNeedingEnrichment = prevGrouped.filter(r => !r.conversion_actions_prev);
+      if (rowsNeedingEnrichment.length > 0) {
+        const enriched = await enrichWithConversionActions(rowsNeedingEnrichment, {
+          report: conversionActionsEnricherCfg.report,
+          joinKeys: conversionActionsEnricherCfg.joinKeys,
+          outputPath: 'conversion_actions_prev',
+          aggregate: conversionActionsEnricherCfg.aggregate,
+          fromDate: baseline.from_date,
+          toDate: baseline.to_date
+        }, ctx);
+        
+        // Map enriched rows back to prevGrouped using groupKeys (the actual grouping keys)
+        // This ensures we match grouped rows correctly, even if joinKeys differ from groupKeys
+        const enrichedMap = new Map();
+        for (const row of enriched) {
+          const key = keyFromRow(row, groupKeys);
+          enrichedMap.set(key, row);
+        }
+        
+        prevGrouped = prevGrouped.map(row => {
+          const key = keyFromRow(row, groupKeys);
+          const enrichedRow = enrichedMap.get(key);
+          if (enrichedRow && enrichedRow.conversion_actions_prev) {
+            return { ...row, conversion_actions_prev: enrichedRow.conversion_actions_prev };
+          }
+          return row;
+        });
+      }
+    }
+  }
   // Apply action labels to previous period data (since applyActionLabels runs after group in pipeline,
   // it's not included in runPre, so we need to apply it manually here)
   const prevWithLabels = await applyActionLabelsStep(prevGrouped, {}, ctx);
@@ -249,13 +407,19 @@ async function deltaAugment(rows, cfg = {}, ctx) {
       ? (Array.isArray(currOrig) ? [...currOrig] : { ...currOrig })
       : synthesizeCurrentRowFrom(prev);
 
+    // Copy conversion_actions_prev from previous period row if it exists
+    if (prev && prev.conversion_actions_prev) {
+      curr.conversion_actions_prev = prev.conversion_actions_prev;
+    }
+
     for (const m of measures) {
       if (m.kind === "absolute") {
         const currVal = Number(getAtPath(curr, m.field));
         const prevVal = prev != null ? Number(getAtPath(prev, m.field)) : 0;
 
         const name = leaf(m.field);
-        setAtPath(curr, `${nsPrev}.${name}`, Number.isFinite(prevVal) ? prevVal : null);
+        const prevValToStore = Number.isFinite(prevVal) ? prevVal : null;
+        setAtPath(curr, `${nsPrev}.${name}`, prevValToStore);
 
         const abs = (Number.isFinite(currVal) ? currVal : 0) - (Number.isFinite(prevVal) ? prevVal : 0);
         setAtPath(curr, `${nsDAbs}.${name}`, Number.isFinite(abs) ? abs : null);

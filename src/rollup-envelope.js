@@ -256,6 +256,90 @@ function rollupEnvelopeStep(rows, cfg = {}, ctx) {
     }
   }
 
+  // 4c) Aggregate conversion_actions_prev if it exists in rows (for previous period breakdown)
+  const prevActionMap = new Map(); // Map of action name -> aggregated metrics for previous period
+  let prevTotalConversions = 0;
+  let prevTotalConversionsValue = 0;
+  let prevTotalAllConversions = 0;
+  let prevTotalAllConversionsValue = 0;
+  
+  // Get filtered conversion actions from config (if any) - same filter applies to previous period
+  const filteredActions = cfg.filteredConversionActions || null;
+  const normalizeActionName = (name) => String(name).toLowerCase().trim();
+  const normalizedFilteredActions = filteredActions 
+    ? filteredActions.map(normalizeActionName)
+    : null;
+
+  for (const row of scan) {
+    const convActionsPrev = getAtPath(row, 'conversion_actions_prev');
+    if (convActionsPrev && convActionsPrev.conversion_actions && Array.isArray(convActionsPrev.conversion_actions)) {
+      // Aggregate ALL individual actions from previous period
+      for (const action of convActionsPrev.conversion_actions) {
+        const actionName = action.name;
+        const normalizedActionName = normalizeActionName(actionName);
+        
+        // Always include all actions in the breakdown
+        if (!prevActionMap.has(actionName)) {
+          prevActionMap.set(actionName, {
+            name: actionName,
+            conversions: 0,
+            conversions_value: 0,
+            all_conversions: 0,
+            all_conversions_value: 0
+          });
+        }
+        const aggregated = prevActionMap.get(actionName);
+        aggregated.conversions += safeNumber(action.conversions || 0);
+        aggregated.conversions_value += safeNumber(action.conversions_value || 0);
+        aggregated.all_conversions += safeNumber(action.all_conversions || 0);
+        aggregated.all_conversions_value += safeNumber(action.all_conversions_value || 0);
+        
+        // Only accumulate totals from filtered actions (for metrics_prev.conversions/conversions_value)
+        if (!normalizedFilteredActions || normalizedFilteredActions.includes(normalizedActionName)) {
+          prevTotalConversions += safeNumber(action.conversions || 0);
+          prevTotalConversionsValue += safeNumber(action.conversions_value || 0);
+        }
+        
+        // Always accumulate all_conversions totals
+        prevTotalAllConversions += safeNumber(action.all_conversions || 0);
+        prevTotalAllConversionsValue += safeNumber(action.all_conversions_value || 0);
+      }
+    }
+    
+    // If NO filtering, use totals from conversion_actions_prev structure
+    if (!filteredActions || filteredActions.length === 0) {
+      const convActionsPrev = getAtPath(row, 'conversion_actions_prev');
+      if (convActionsPrev) {
+        prevTotalConversions += safeNumber(convActionsPrev.total_conversions || 0);
+        prevTotalConversionsValue += safeNumber(convActionsPrev.total_conversions_value || 0);
+      }
+    }
+  }
+  
+  // If we have filtered conversion actions, override metrics_prev.conversions/conversions_value
+  // with the filtered totals from conversion_actions_prev (to ensure consistency)
+  if (normalizedFilteredActions && normalizedFilteredActions.length > 0 && prevTotalConversions > 0) {
+    const metricsPrev = getAtPath(summary, 'metrics_prev');
+    if (metricsPrev) {
+      metricsPrev.conversions = prevTotalConversions;
+      metricsPrev.conversions_value = prevTotalConversionsValue;
+    } else {
+      // Create metrics_prev if it doesn't exist
+      setAtPath(summary, 'metrics_prev.conversions', prevTotalConversions);
+      setAtPath(summary, 'metrics_prev.conversions_value', prevTotalConversionsValue);
+    }
+  }
+
+  if (prevActionMap.size > 0 || prevTotalConversions > 0) {
+    setAtPath(summary, 'conversion_actions_prev', {
+      total_conversions: prevTotalConversions,
+      total_conversions_value: prevTotalConversionsValue,
+      total_all_conversions: prevTotalAllConversions,
+      total_all_conversions_value: prevTotalAllConversionsValue,
+      conversion_actions: Array.from(prevActionMap.values()).sort((a, b) => b.conversions - a.conversions)
+    });
+  }
+
   // 5) Extra expressions (post-compute on the summary object)
   if (expressions && typeof expressions === "object") {
     for (const [path, fn] of Object.entries(expressions)) {

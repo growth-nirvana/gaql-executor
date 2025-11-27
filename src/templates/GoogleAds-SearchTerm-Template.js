@@ -108,6 +108,32 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
           includeRollup: false,
           // (By default rollup rows are ignored in my implementation; if you added an includeRollup flag, leave it false)
         },
+        // Store conversionActionsEnricher config before delta runs (delta needs it for previous period)
+        // Also store conversionActionFilterCfg if conversionAction is configured
+        // The actual enrichment/filtering happens later, but delta needs the config now
+        ...(groupByAttributes ? [{
+          use: "storeConversionActionsCfg",
+          report: {
+            entity: 'search_term_view',
+            attributes: groupByAttributes.filter(attr => !attr.startsWith('campaign_budget.')),
+            segments: ['segments.conversion_action_name'],
+            metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+            from_date: fromDate,
+            to_date: toDate,
+            constraints: report.constraints || []
+          },
+          joinKeys: ['customer.id', 'campaign.id', 'ad_group.id', 'search_term_view.search_term'],
+          outputPath: 'conversion_actions',
+          aggregate: true,
+          fromDate: fromDate,
+          toDate: toDate,
+          // Also pass conversionAction config if specified
+          ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0 ? {
+            conversionActions: config.conversionAction,
+            conversionValueActions: config.conversionValueAction || config.conversionAction,
+            groupByAttributes: groupByAttributes
+          } : {})
+        }] : []),
         {
           use: "delta",
           // Optional: if omitted, it will compute previous range from report.from_date/to_date
@@ -426,10 +452,15 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
-            "conversion_actions",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpa_worseners_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -611,6 +642,10 @@ class GoogleAdsSearchTermTemplate extends BaseTemplate {
           rollupValue: "ACCOUNT",
           copyFromFirst: ["customer.id", "customer.descriptive_name"],
           aggregateConversionActions: true,
+          // Pass filtered conversion actions to rollup so it uses filtered metrics
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         
           // 1) Sum bases for current + previous
           sum: [

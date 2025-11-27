@@ -1,4 +1,5 @@
 // src/google-ads/filter-conversion-actions.js
+const { makeStatusesReadable } = require("../enum-normalizer");
 
 /**
  * Filters conversion actions and aggregates conversions/conversions_value
@@ -20,14 +21,42 @@
  * }
  */
 async function filterConversionActions(rows, cfg = {}, ctx) {
-  if (!cfg.conversionActions || !Array.isArray(cfg.conversionActions) || cfg.conversionActions.length === 0) {
-    // No filtering needed - return rows as-is
+  // Use config from ctx.state if available (stored by storeConversionActionsCfg before delta)
+  // Otherwise use cfg passed directly (from pipeline step)
+  const filterCfg = ctx?.state?.conversionActionFilterCfg || cfg;
+  
+  if (!filterCfg.conversionActions || !Array.isArray(filterCfg.conversionActions) || filterCfg.conversionActions.length === 0) {
     return rows;
   }
 
-  if (!cfg.groupByAttributes || !cfg.report) {
+  if (!filterCfg.groupByAttributes || !filterCfg.report) {
     console.warn('[filterConversionActions] Missing required config: groupByAttributes, report');
     return rows;
+  }
+
+  // Use dates from stored config first (delta stores baseline dates here for previous period)
+  // Then fall back to cfg dates, then ctx.options.report dates
+  // This avoids needing to mutate ctx.options.report which affects other steps
+  const fromDate = filterCfg.fromDate || cfg.fromDate || ctx?.options?.report?.from_date;
+  const toDate = filterCfg.toDate || cfg.toDate || ctx?.options?.report?.to_date;
+  
+  // Ensure we have valid dates
+  if (!fromDate || !toDate) {
+    console.warn('[filterConversionActions] Missing dates - cannot fetch conversion actions');
+    return rows;
+  }
+
+  // Store config in ctx.state on first run (current period) if not already stored
+  // This ensures it's available when runPre processes previous period
+  if (ctx && ctx.state && cfg.conversionActions && !ctx.state.conversionActionFilterCfg) {
+    ctx.state.conversionActionFilterCfg = {
+      conversionActions: cfg.conversionActions,
+      conversionValueActions: cfg.conversionValueActions || cfg.conversionActions,
+      groupByAttributes: cfg.groupByAttributes,
+      report: cfg.report,
+      fromDate: fromDate, // Store dates so delta can update them for previous period
+      toDate: toDate
+    };
   }
 
   // Normalize conversion action names (case-insensitive, handle variations)
@@ -35,12 +64,12 @@ async function filterConversionActions(rows, cfg = {}, ctx) {
     return String(name).toLowerCase().trim();
   };
 
-  const normalizedConversionActions = cfg.conversionActions.map(normalizeActionName);
-  const normalizedConversionValueActions = (cfg.conversionValueActions || cfg.conversionActions).map(normalizeActionName);
+  const normalizedConversionActions = filterCfg.conversionActions.map(normalizeActionName);
+  const normalizedConversionValueActions = (filterCfg.conversionValueActions || filterCfg.conversionActions).map(normalizeActionName);
 
   // Build conversion action report - use same attributes/segments as main query
   // Include any segments from the main report so grouping matches correctly
-  const mainSegments = cfg.report.segments || [];
+  const mainSegments = filterCfg.report.segments || [];
   
   // Filter out segments that are incompatible with segments.conversion_action_name
   // Compatible segments include: date, month, device, ad_network_type, click_type, etc.
@@ -52,13 +81,17 @@ async function filterConversionActions(rows, cfg = {}, ctx) {
     return true;
   });
   
-  // Combine groupByAttributes with segments from report for complete grouping key
-  // Exclude conversion_action_name from grouping fields since main rows don't have it
+  // For matching, we use all groupByAttributes (now that enums are normalized)
+  // The conversion data is normalized with makeStatusesReadable to match main query format
+  const matchingFields = filterCfg.groupByAttributes.filter(attr => !attr.startsWith('segments.'));
+  
+  // For the conversion report, we can include segments for more granular data
+  // But when matching back to rows, we only use attributes
   const allGroupingFields = [
-    ...cfg.groupByAttributes, 
+    ...matchingFields,
     ...mainSegments.filter(s => 
       s !== 'segments.conversion_action_name' && 
-      !cfg.groupByAttributes.includes(s)
+      !matchingFields.includes(s)
     )
   ];
   
@@ -69,13 +102,13 @@ async function filterConversionActions(rows, cfg = {}, ctx) {
   // So we remove ALL constraints to be safe
   
   const conversionReport = {
-    entity: cfg.report.entity,
+    entity: filterCfg.report.entity,
     segments: [
       'segments.conversion_action_name',
       ...compatibleSegments  // Include compatible segments from main query
     ],
     // Keep same attributes for grouping (segments are handled separately)
-    attributes: cfg.groupByAttributes.filter(attr => !attr.startsWith('segments.')),
+    attributes: filterCfg.groupByAttributes.filter(attr => !attr.startsWith('segments.')),
     // ONLY these 4 metrics are compatible with segments.conversion_action_name
     metrics: [
       'metrics.conversions',
@@ -83,15 +116,22 @@ async function filterConversionActions(rows, cfg = {}, ctx) {
       'metrics.all_conversions',
       'metrics.all_conversions_value'
     ],
-    from_date: cfg.fromDate,
-    to_date: cfg.toDate,
+    from_date: fromDate,
+    to_date: toDate,
     constraints: [], // Empty constraints - cannot use any constraints with conversion_action_name
-    limit: cfg.report.limit || null
+    // Only include limit if it's a valid positive integer
+    ...(filterCfg.report.limit && Number.isInteger(filterCfg.report.limit) && filterCfg.report.limit > 0 ? { limit: filterCfg.report.limit } : {})
   };
 
-  // Fetch conversion action data
-  // Pass the entire report object, not just overrides, to ensure clean report
-  const conversionData = await ctx.fetch(conversionReport, 'conversion_actions');
+  // Fetch conversion action data for the specified date range
+  // CRITICAL: When called by delta step, fromDate/toDate are previous period dates
+  // We must ensure these dates override baseReport dates in ctx.fetch
+  // Pass conversionReport as overrides - overrideReportOptions will replace baseReport fields
+  const conversionDataRaw = await ctx.fetch(conversionReport, 'conversion_actions');
+  
+  // Normalize enums in conversion data to match main query format (enum names, not IDs)
+  // This ensures matching works correctly (e.g., "MAXIMIZE_CONVERSION_VALUE" not 11)
+  const conversionData = makeStatusesReadable(conversionDataRaw);
 
   // Filter to only specified conversion actions
   const filteredConversionData = conversionData.filter(row => {
@@ -106,13 +146,12 @@ async function filterConversionActions(rows, cfg = {}, ctx) {
   
   for (const convRow of filteredConversionData) {
     // Build key from all grouping fields (attributes + segments)
-    const key = JSON.stringify(
-      allGroupingFields.reduce((acc, field) => {
-        const value = getAtPath(convRow, field);
-        acc[field] = value;
-        return acc;
-      }, {})
-    );
+    const keyParts = allGroupingFields.reduce((acc, field) => {
+      const value = getAtPath(convRow, field);
+      acc[field] = value;
+      return acc;
+    }, {});
+    const key = JSON.stringify(keyParts);
 
     if (!conversionIndex.has(key)) {
       conversionIndex.set(key, {
@@ -143,28 +182,54 @@ async function filterConversionActions(rows, cfg = {}, ctx) {
   
   // Merge filtered conversion data into main rows
   // Since rows aren't grouped yet, we need to match each row to aggregated conversion data
-  return rows.map(row => {
+  const filteredRows = rows.map((row, idx) => {
     const out = Array.isArray(row) ? [...row] : { ...row };
 
-    // Build key from all grouping fields (attributes + segments) to match conversion data
-    const key = JSON.stringify(
-      allGroupingFields.reduce((acc, field) => {
-        const value = getAtPath(row, field);
-        acc[field] = value;
-        return acc;
-      }, {})
-    );
-
-    const aggregated = conversionIndex.get(key);
+    // Build key from matching fields (attributes only) to match conversion data
+    // We aggregate conversion data by allGroupingFields (attributes + segments),
+    // but match rows by attributes only (matchingFields)
+    const keyParts = matchingFields.reduce((acc, field) => {
+      const value = getAtPath(row, field);
+      acc[field] = value;
+      return acc;
+    }, {});
     
-    if (aggregated) {
+    // Find matching conversion data by aggregating all conversion rows that match these attributes
+    // (ignoring segments in the match)
+    let matchedConversions = 0;
+    let matchedConversionsValue = 0;
+    let matchedAllConversions = 0;
+    let matchedAllConversionsValue = 0;
+    
+    for (const [convKey, convData] of conversionIndex.entries()) {
+      const convKeyParts = JSON.parse(convKey);
+      // Check if attributes match (ignore segments)
+      const attributesMatch = matchingFields.every(field => {
+        const rowValue = getAtPath(row, field);
+        const convValue = convKeyParts[field];
+        return rowValue === convValue || (rowValue == null && convValue == null);
+      });
+      
+      if (attributesMatch) {
+        matchedConversions += convData.conversions;
+        matchedConversionsValue += convData.conversions_value;
+        matchedAllConversions += convData.all_conversions;
+        matchedAllConversionsValue += convData.all_conversions_value;
+      }
+    }
+    
+    const key = JSON.stringify(keyParts);
+
+    // Use matched values (aggregated across all segments for these attributes)
+    if (matchedConversions > 0 || matchedConversionsValue > 0) {
       // Overwrite conversions/conversions_value with filtered values
       if (!out.metrics) out.metrics = {};
-      out.metrics.conversions = aggregated.conversions;
-      out.metrics.conversions_value = aggregated.conversions_value;
+      const oldConversions = out.metrics.conversions;
+      out.metrics.conversions = matchedConversions;
+      out.metrics.conversions_value = matchedConversionsValue;
       // Also store all_conversions for reference
-      out.metrics.all_conversions = aggregated.all_conversions;
-      out.metrics.all_conversions_value = aggregated.all_conversions_value;
+      out.metrics.all_conversions = matchedAllConversions;
+      out.metrics.all_conversions_value = matchedAllConversionsValue;
     } else {
       // No matching conversion actions - set to 0
       if (!out.metrics) out.metrics = {};
@@ -174,6 +239,8 @@ async function filterConversionActions(rows, cfg = {}, ctx) {
 
     return out;
   });
+  
+  return filteredRows;
 }
 
 function getAtPath(obj, path) {

@@ -90,6 +90,32 @@ class GoogleAdsCustomerTemplate extends BaseTemplate {
         naming: "flat",
         includeRollup: false,
       },
+      // Store conversionActionsEnricher config before delta runs (delta needs it for previous period)
+      // Also store conversionActionFilterCfg if conversionAction is configured
+      // The actual enrichment/filtering happens later, but delta needs the config now
+      ...(groupByAttributes ? [{
+        use: "storeConversionActionsCfg",
+        report: {
+          entity: 'customer',
+          attributes: groupByAttributes,
+          segments: ['segments.conversion_action_name'],
+          metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+          from_date: fromDate,
+          to_date: toDate,
+          constraints: config.constraints || []
+        },
+        joinKeys: ['customer.id'],
+        outputPath: 'conversion_actions',
+        aggregate: true,
+        fromDate: fromDate,
+        toDate: toDate,
+        // Also pass conversionAction config if specified
+        ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0 ? {
+          conversionActions: config.conversionAction,
+          conversionValueActions: config.conversionValueAction || config.conversionAction,
+          groupByAttributes: groupByAttributes
+        } : {})
+      }] : []),
       {
         use: "delta",
         baseline: { mode: "previous_period" },

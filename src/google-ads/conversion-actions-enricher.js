@@ -47,12 +47,47 @@ async function enrichWithConversionActions(rows, cfg = {}, ctx) {
     return rows;
   }
 
+  // Use provided dates or fall back to report dates (for delta step usage)
+  const fromDate = cfg.fromDate || cfg.report?.from_date || ctx?.options?.report?.from_date;
+  const toDate = cfg.toDate || cfg.report?.to_date || ctx?.options?.report?.to_date;
+
+  // If dates are explicitly provided and don't match report dates, this is delta calling us with previous period dates
+  // Otherwise, if dates don't match report and weren't explicitly provided, skip (runPre on previous period data)
+  const hasExplicitDates = cfg.fromDate && cfg.toDate;
+  const datesMatchReport = ctx?.options?.report?.from_date && ctx?.options?.report?.to_date &&
+    fromDate === ctx.options.report.from_date && toDate === ctx.options.report.to_date;
+  
+  // Skip enrichment if:
+  // - Dates don't match report dates AND
+  // - Dates weren't explicitly provided (meaning this is runPre using cfg dates on wrong-period data)
+  // AND this is NOT the _prev version (delta will handle _prev)
+  if (!hasExplicitDates && !datesMatchReport && ctx?.options?.report?.from_date && ctx?.options?.report?.to_date && cfg.outputPath === 'conversion_actions') {
+    // This is previous period data being processed by runPre with current period cfg dates
+    // Skip enrichment here - delta step will handle it with correct dates as conversion_actions_prev
+    return rows;
+  }
+
+  // Store config in ctx.state so delta step can apply same enrichment to previous period
+  if (ctx && ctx.state && cfg.outputPath === 'conversion_actions') {
+    // Only store if this is the main conversion_actions (not _prev)
+    ctx.state.conversionActionsEnricherCfg = {
+      report: cfg.report,
+      joinKeys: cfg.joinKeys,
+      outputPath: cfg.outputPath,
+      aggregate: cfg.aggregate,
+      fromDate: cfg.fromDate || cfg.report?.from_date,
+      toDate: cfg.toDate || cfg.report?.to_date
+    };
+  }
+
   // Remove all constraints from the conversion actions query
   // The join keys will naturally filter to only matching rows, and constraints
   // (especially metric constraints) can cause errors if the field isn't in the SELECT clause
   // overrideReportOptions will handle removing constraints when segments.conversion_action_name is present
   const cleanedReport = {
     ...cfg.report,
+    from_date: fromDate,
+    to_date: toDate,
     constraints: [] // Remove all constraints - join keys handle filtering
   };
 
@@ -76,7 +111,7 @@ async function enrichWithConversionActions(rows, cfg = {}, ctx) {
   }
 
   // Enrich each row with conversion action data
-  return rows.map(row => {
+  const enrichedRows = rows.map(row => {
     const out = Array.isArray(row) ? [...row] : { ...row };
     
     const key = JSON.stringify(
@@ -122,6 +157,8 @@ async function enrichWithConversionActions(rows, cfg = {}, ctx) {
     
     return out;
   });
+  
+  return enrichedRows;
 }
 
 module.exports = { enrichWithConversionActions };

@@ -75,13 +75,61 @@ function topNStep(rows, config, ctx) {
       fieldsToCopy.add(path);
     }
   }
+  
+  // Always include conversion_actions_prev if filtering is enabled (needed for override logic)
+  if (config.filteredConversionActions && Array.isArray(config.filteredConversionActions) && config.filteredConversionActions.length > 0) {
+    fieldsToCopy.add('conversion_actions_prev');
+  }
 
-  // 4) slice & project
+  // 4) If filtering is enabled, override metrics_prev.conversions with filtered totals from conversion_actions_prev
+  // Do this BEFORE copying so we can use the original rows and the override will be copied
+  const filteredActions = config.filteredConversionActions || null;
+  if (filteredActions && Array.isArray(filteredActions) && filteredActions.length > 0) {
+    const normalizeActionName = (name) => String(name).toLowerCase().trim();
+    const normalizedFilteredActions = filteredActions.map(normalizeActionName);
+    
+    // Apply override to the top N rows BEFORE copying
+    for (let i = 0; i < Math.min(n, sorted.length); i++) {
+      const row = sorted[i];
+      const convActionsPrev = getAtPath(row, 'conversion_actions_prev');
+      
+      if (convActionsPrev && convActionsPrev.conversion_actions && Array.isArray(convActionsPrev.conversion_actions)) {
+        // Sum conversions from filtered actions only
+        let filteredConversions = 0;
+        let filteredConversionsValue = 0;
+        
+        for (const action of convActionsPrev.conversion_actions) {
+          const normalizedActionName = normalizeActionName(action.name);
+          if (normalizedFilteredActions.includes(normalizedActionName)) {
+            filteredConversions += Number(action.conversions || 0);
+            filteredConversionsValue += Number(action.conversions_value || 0);
+          }
+        }
+        
+        // Override metrics_prev.conversions/conversions_value with filtered totals
+        if (filteredConversions > 0 || filteredConversionsValue > 0) {
+          const metricsPrev = getAtPath(row, 'metrics_prev');
+          
+          if (metricsPrev) {
+            metricsPrev.conversions = filteredConversions;
+            metricsPrev.conversions_value = filteredConversionsValue;
+          } else {
+            setAtPath(row, 'metrics_prev.conversions', filteredConversions);
+            setAtPath(row, 'metrics_prev.conversions_value', filteredConversionsValue);
+          }
+        }
+      }
+    }
+  }
+
+  // 4b) slice & project (after override so filtered values are copied)
   const topN = sorted.slice(0, n).map(row => {
     const out = {};
     for (const path of fieldsToCopy) {
       const val = getAtPath(row, path);
-      if (includeNulls || val !== undefined) setAtPath(out, path, val);
+      if (includeNulls || val !== undefined) {
+        setAtPath(out, path, val);
+      }
     }
     return out;
   });

@@ -27,8 +27,8 @@ class GoogleAdsAdTemplate extends BaseTemplate {
         'metrics.cost_micros',
         'metrics.clicks',
         'metrics.impressions',
-        'metrics.conversions_api',  // API conversions field (will be renamed/used based on conversionAction)
-        'metrics.conversions_value_api'  // API conversion_values field (will be renamed/used based on conversionAction)
+        'metrics.conversions',  // API conversions field (will be preserved as conversions_api, then filtered if needed)
+        'metrics.conversions_value'  // API conversion_values field (will be preserved as conversions_value_api, then filtered if needed)
       ]
     }
   }
@@ -54,9 +54,9 @@ class GoogleAdsAdTemplate extends BaseTemplate {
         {
           use: "derive",
           add: {
-            // Always preserve API values
-            "metrics.conversions_api": (r) => r.metrics?.conversions_api ?? 0,
-            "metrics.conversions_value_api": (r) => r.metrics?.conversions_value_api ?? 0,
+            // Always preserve original API values (rename from API response)
+            "metrics.conversions_api": (r) => r.metrics?.conversions ?? 0,
+            "metrics.conversions_value_api": (r) => r.metrics?.conversions_value ?? 0,
             // If conversionAction is NOT specified, use API values as regular conversions
             // If conversionAction IS specified, filterConversionActions will overwrite these
             "metrics.conversions": (r) => {
@@ -64,14 +64,14 @@ class GoogleAdsAdTemplate extends BaseTemplate {
                 // Will be overwritten by filterConversionActions
                 return 0;
               }
-              return r.metrics?.conversions_api ?? 0;
+              return r.metrics?.conversions ?? 0;
             },
             "metrics.conversions_value": (r) => {
               if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
                 // Will be overwritten by filterConversionActions
                 return 0;
               }
-              return r.metrics?.conversions_value_api ?? 0;
+              return r.metrics?.conversions_value ?? 0;
             }
           }
         },
@@ -123,6 +123,32 @@ class GoogleAdsAdTemplate extends BaseTemplate {
           includeRollup: false,
           // (By default rollup rows are ignored in my implementation; if you added an includeRollup flag, leave it false)
         },
+        // Store conversionActionsEnricher config before delta runs (delta needs it for previous period)
+        // Also store conversionActionFilterCfg if conversionAction is configured
+        // The actual enrichment/filtering happens later, but delta needs the config now
+        ...(groupByAttributes ? [{
+          use: "storeConversionActionsCfg",
+          report: {
+            entity: 'ad_group_ad',
+            attributes: groupByAttributes.filter(attr => !attr.startsWith('campaign_budget.')),
+            segments: ['segments.conversion_action_name'],
+            metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+            from_date: fromDate,
+            to_date: toDate,
+            constraints: report.constraints || []
+          },
+          joinKeys: ['customer.id', 'campaign.id', 'ad_group.id', 'ad_group_ad.ad.id'],
+          outputPath: 'conversion_actions',
+          aggregate: true,
+          fromDate: fromDate,
+          toDate: toDate,
+          // Also pass conversionAction config if specified
+          ...(config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0 ? {
+            conversionActions: config.conversionAction,
+            conversionValueActions: config.conversionValueAction || config.conversionAction,
+            groupByAttributes: groupByAttributes
+          } : {})
+        }] : []),
         {
           use: "delta",
           // Optional: if omitted, it will compute previous range from report.from_date/to_date
@@ -151,25 +177,25 @@ class GoogleAdsAdTemplate extends BaseTemplate {
           },
           policies: { pctOnZero: "null" }
         },
-        // Only add conversionActionsEnricher if conversionAction is NOT specified
-        // (if conversionAction is specified, filterConversionActions already handles it)
-        ...(!config.conversionAction || !Array.isArray(config.conversionAction) || config.conversionAction.length === 0
-          ? [{
-              use: "conversionActionsEnricher",
-              report: {
-                entity: 'ad_group_ad',
-                attributes: groupByAttributes.filter(attr => !attr.startsWith('campaign_budget.')),
-                segments: ['segments.conversion_action_name'],
-                metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
-                from_date: fromDate,
-                to_date: toDate,
-                constraints: report.constraints || []
-              },
-              joinKeys: ['customer.id', 'ad_group_ad.ad.id'],
-              outputPath: 'conversion_actions',
-              aggregate: true
-            }]
-          : []),
+        // Always add conversionActionsEnricher to show breakdown of all conversion actions
+        // (like Facebook - shows all actions in breakdown)
+        {
+          use: "conversionActionsEnricher",
+          report: {
+            entity: 'ad_group_ad',
+            // Use the same attributes as the main query for proper joining
+            attributes: groupByAttributes.filter(attr => !attr.startsWith('campaign_budget.')), // Exclude budget fields that might cause join issues
+            segments: ['segments.conversion_action_name'],
+            metrics: ['metrics.conversions', 'metrics.conversions_value', 'metrics.all_conversions', 'metrics.all_conversions_value'],
+            from_date: fromDate,
+            to_date: toDate,
+            constraints: report.constraints || []  // Use same constraints as main query
+          },
+          // Use all grouping dimensions as join keys to ensure unique matching (ad.id alone isn't unique across ad groups/campaigns)
+          joinKeys: ['customer.id', 'campaign.id', 'ad_group.id', 'ad_group_ad.ad.id'],
+          outputPath: 'conversion_actions',
+          aggregate: true
+        },
         {
           use: "derive",
           prefix: "diagnostics",     // everything lands under diagnostics.*
@@ -392,9 +418,15 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpa_worseners_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -426,9 +458,15 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpa_improvers_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -460,9 +498,15 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cvr_drops_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -494,9 +538,15 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cvr_improvers_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -528,9 +578,15 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpc_rises_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         { 
           use: "topN",
@@ -562,9 +618,15 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             "metrics_prev.cpa",
             "metrics_prev.roas",
             "metrics_prev.cost_share",
+            "conversion_actions", // Include conversion actions breakdown
+            "conversion_actions_prev", // Include previous period conversion actions breakdown
           ],
           excludeRollup: true,
           as: "top_n_cpc_falls_by_impact",
+          // Pass filtered conversion actions so topN can override metrics_prev.conversions
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         },
         {
           use: "rollupEnvelope",
@@ -578,6 +640,13 @@ class GoogleAdsAdTemplate extends BaseTemplate {
             "metrics.cost","metrics.clicks","metrics.impressions","metrics.conversions","metrics.conversions_value",
             "metrics_prev.cost","metrics_prev.clicks","metrics_prev.impressions","metrics_prev.conversions","metrics_prev.conversions_value"
           ],
+          
+          // Aggregate conversion_actions across all rows
+          aggregateConversionActions: true,
+          // Pass filtered conversion actions to rollup so it uses filtered metrics
+          filteredConversionActions: config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0
+            ? config.conversionAction
+            : null,
         
           // 2) Compute ratios from summed bases (never average ratios)
           ratios: [
@@ -708,9 +777,9 @@ class GoogleAdsAdTemplate extends BaseTemplate {
       {
         use: "derive",
         add: {
-          // Always preserve API values
-          "metrics.conversions_api": (r) => r.metrics?.conversions_api ?? 0,
-          "metrics.conversions_value_api": (r) => r.metrics?.conversions_value_api ?? 0,
+          // Always preserve original API values (rename from API response)
+          "metrics.conversions_api": (r) => r.metrics?.conversions ?? 0,
+          "metrics.conversions_value_api": (r) => r.metrics?.conversions_value ?? 0,
           // If conversionAction is NOT specified, use API values as regular conversions
           // If conversionAction IS specified, filterConversionActions will overwrite these
           "metrics.conversions": (r) => {
@@ -718,14 +787,14 @@ class GoogleAdsAdTemplate extends BaseTemplate {
               // Will be overwritten by filterConversionActions
               return 0;
             }
-            return r.metrics?.conversions_api ?? 0;
+            return r.metrics?.conversions ?? 0;
           },
           "metrics.conversions_value": (r) => {
             if (config.conversionAction && Array.isArray(config.conversionAction) && config.conversionAction.length > 0) {
               // Will be overwritten by filterConversionActions
               return 0;
             }
-            return r.metrics?.conversions_value_api ?? 0;
+            return r.metrics?.conversions_value ?? 0;
           }
         }
       },

@@ -14,6 +14,7 @@ const { loadCustomConversionsStep } = require("./fb/load-custom-conversions-step
 const { applyActionLabelsStep } = require("./fb/apply-action-labels-step");
 const { enrichWithConversionActions } = require("./google-ads/conversion-actions-enricher");
 const { filterConversionActions } = require("./google-ads/filter-conversion-actions");
+const { storeConversionActionsCfg } = require("./store-conversion-actions-cfg");
 const { topNStep } = require("./top-n");
 const { derive } = require("./derive");
 const { rollupEnvelopeStep } = require("./rollup-envelope");
@@ -83,6 +84,10 @@ const STEPS = {
   filterConversionActions: withTraits(
     async (rows, cfg, ctx) => filterConversionActions(rows, cfg, ctx),
     { phase: "pre", changesCardinality: false }
+  ),
+  storeConversionActionsCfg: withTraits(
+    (rows, cfg, ctx) => storeConversionActionsCfg(rows, cfg, ctx),
+    { phase: "post", changesCardinality: false }
   ),
   shareOf: withTraits((rows, cfg) => shareOfStep(rows, cfg), { phase: "post", changesCardinality: false }),
   stats:   withTraits((rows, cfg) => statsStep(rows, cfg),   { phase: "post", changesCardinality: false }),

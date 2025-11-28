@@ -17,46 +17,10 @@ class GA4EventTemplate extends GA4BaseTemplate {
   }
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
-    const baseReport = this.getBaseReport();
-    
-    const dateRanges = [{
-      startDate: fromDate,
-      endDate: toDate,
-    }];
-
-    // Allow filtering by specific event names
-    let dimensionFilter = config.dimensionFilter || null;
-    if (config.eventNames && Array.isArray(config.eventNames) && config.eventNames.length > 0) {
-      dimensionFilter = {
-        expressions: config.eventNames.map(eventName => ({
-          field: 'eventName',
-          op: '=',
-          value: eventName,
-        })),
-      };
-    }
-
-    const report = {
-      ...baseReport,
-      dateRanges,
-      dimensionFilter,
-      metricFilter: config.metricFilter || null,
-      orderBys: config.orderBys || [
-        { metric: 'eventCount', desc: true }
-      ],
-      limit: config.limit || null,
-      offset: config.offset || null,
-    };
-
-    return new this({
-      credentials,
-      report,
-      pipeline: this.getBasePipeline(config),
-      output: {
-        mode: config.outputMode || "envelope",
-        include: config.include || ["periods"],
-      }
-    });
+    const defaultOrderBys = [
+      { metric: 'eventCount', desc: true }
+    ];
+    return super.forPerformanceAnalysis(credentials, fromDate, toDate, config, defaultOrderBys);
   }
 
   static forTrends(credentials, fromDate, toDate, config = {}) {
@@ -105,28 +69,12 @@ class GA4EventTemplate extends GA4BaseTemplate {
     // For trends, always include date dimension
     const dimensions = ['date', ...baseReport.dimensions];
 
-    const dateRanges = [{
-      startDate: formatDate(from),
-      endDate: formatDate(to),
-    }];
-
-    // Allow filtering by specific event names
-    let dimensionFilter = config.dimensionFilter || null;
-    if (config.eventNames && Array.isArray(config.eventNames) && config.eventNames.length > 0) {
-      dimensionFilter = {
-        expressions: config.eventNames.map(eventName => ({
-          field: 'eventName',
-          op: '=',
-          value: eventName,
-        })),
-      };
-    }
-
     const report = {
       ...baseReport,
       dimensions,
-      dateRanges,
-      dimensionFilter,
+      from_date: formatDate(from),
+      to_date: formatDate(to),
+      dimensionFilter: config.dimensionFilter || null,
       metricFilter: config.metricFilter || null,
       orderBys: config.orderBys || [
         { dimension: 'date', desc: false },
@@ -173,6 +121,8 @@ class GA4EventTemplate extends GA4BaseTemplate {
     return new this({
       credentials,
       report,
+      filters: config.filters || [],
+      filterLogic: config.filterLogic || 'AND',
       pipeline,
       output: {
         mode: config.outputMode || "envelope",

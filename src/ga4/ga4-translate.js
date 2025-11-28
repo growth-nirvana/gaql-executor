@@ -15,12 +15,18 @@ const DIMENSION_MAP = {
   'pagePath': 'pagePath',
   'pageTitle': 'pageTitle',
   'pageLocation': 'pageLocation',
-  'source': 'source',
-  'medium': 'medium',
-  'campaign': 'campaignName',
+  // Session-scoped dimensions (preferred for session-based analysis)
   'sessionSource': 'sessionSource',
   'sessionMedium': 'sessionMedium',
-  'sessionCampaign': 'sessionCampaign',
+  'sessionCampaign': 'sessionCampaignName',
+  // First user-scoped dimensions (for user acquisition analysis)
+  'firstUserSource': 'firstUserSource',
+  'firstUserMedium': 'firstUserMedium',
+  'firstUserCampaign': 'firstUserCampaignName',
+  // Legacy aliases - map to session-scoped for backward compatibility
+  'source': 'sessionSource',
+  'medium': 'sessionMedium',
+  'campaign': 'sessionCampaignName',
   'deviceCategory': 'deviceCategory',
   'country': 'country',
   'city': 'city',
@@ -64,6 +70,8 @@ function buildGA4Request(report, propertyId) {
     dimensions = [],
     metrics = [],
     dateRanges = [],
+    from_date,
+    to_date,
     dimensionFilter = null,
     metricFilter = null,
     orderBys = [],
@@ -84,21 +92,34 @@ function buildGA4Request(report, propertyId) {
     return { name: mapped };
   });
 
-  // Build date ranges (default to last 30 days if not provided)
-  const ga4DateRanges = dateRanges.length > 0
-    ? dateRanges.map(range => {
-        // GA4 accepts dates in YYYY-MM-DD format or relative dates like '30daysAgo', 'today'
-        const startDate = range.startDate || range.from_date || '30daysAgo';
-        const endDate = range.endDate || range.to_date || 'today';
-        return {
-          startDate,
-          endDate,
-          ...(range.name && { name: range.name }),
-        };
-      })
-    : [{ startDate: '30daysAgo', endDate: 'today' }];
+  // Build date ranges - support standard from_date/to_date interface (like Google Ads)
+  // or legacy dateRanges array format
+  let ga4DateRanges;
+  if (from_date && to_date) {
+    // Standard interface: transform from_date/to_date to GA4 dateRanges format
+    ga4DateRanges = [{
+      startDate: from_date,
+      endDate: to_date,
+    }];
+  } else if (dateRanges.length > 0) {
+    // Legacy format: use dateRanges array
+    ga4DateRanges = dateRanges.map(range => {
+      // GA4 accepts dates in YYYY-MM-DD format or relative dates like '30daysAgo', 'today'
+      const startDate = range.startDate || range.from_date || '30daysAgo';
+      const endDate = range.endDate || range.to_date || 'today';
+      return {
+        startDate,
+        endDate,
+        ...(range.name && { name: range.name }),
+      };
+    });
+  } else {
+    // Default to last 30 days if nothing provided
+    ga4DateRanges = [{ startDate: '30daysAgo', endDate: 'today' }];
+  }
 
   // Build request
+  // The @google-analytics/data client library expects camelCase field names
   const request = {
     property: `properties/${propertyId}`,
     dateRanges: ga4DateRanges,
@@ -107,48 +128,52 @@ function buildGA4Request(report, propertyId) {
   };
 
   // Add filters if provided
+  // convertFiltersToGA4 already returns GA4 format in camelCase
   if (dimensionFilter) {
-    request.dimensionFilter = buildFilterExpression(dimensionFilter);
+    request.dimensionFilter = dimensionFilter;
   }
 
   if (metricFilter) {
-    request.metricFilter = buildFilterExpression(metricFilter);
+    request.metricFilter = metricFilter;
   }
 
-  // Add ordering
-  if (orderBys && orderBys.length > 0) {
+  // Add ordering (only if provided and not empty)
+  if (orderBys && Array.isArray(orderBys) && orderBys.length > 0) {
     request.orderBys = orderBys.map(order => {
       if (order.dimension) {
+        const dimName = DIMENSION_MAP[order.dimension] || order.dimension;
         return {
           dimension: {
-            dimensionName: DIMENSION_MAP[order.dimension] || order.dimension,
+            dimensionName: dimName,
             orderType: order.orderType || 'ALPHANUMERIC',
           },
-          desc: order.desc || false,
+          desc: order.desc !== undefined ? order.desc : false,
         };
       } else if (order.metric) {
+        const metricName = METRIC_MAP[order.metric] || order.metric;
         return {
           metric: {
-            metricName: METRIC_MAP[order.metric] || order.metric,
+            metricName: metricName,
           },
-          desc: order.desc || false,
+          desc: order.desc !== undefined ? order.desc : false,
         };
       }
+      // If order is already in correct format, return as-is
       return order;
     });
   }
 
-  // Add limit and offset
-  if (limit !== null) {
+  // Add limit and offset (only if not null/undefined)
+  if (limit != null) {
     request.limit = limit;
   }
 
-  if (offset !== null) {
+  if (offset != null) {
     request.offset = offset;
   }
 
-  // Keep empty rows
-  if (keepEmptyRows) {
+  // Keep empty rows (only if true)
+  if (keepEmptyRows === true) {
     request.keepEmptyRows = keepEmptyRows;
   }
 

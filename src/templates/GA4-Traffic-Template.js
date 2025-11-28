@@ -5,9 +5,10 @@ class GA4TrafficTemplate extends GA4BaseTemplate {
   static getBaseReport() {
     return {
       dimensions: [
-        'source',
-        'medium',
-        'campaign',
+        'sessionDefaultChannelGroup',
+        'sessionSource',
+        'sessionMedium',
+        'sessionCampaign',
       ],
       metrics: [
         'sessions',
@@ -18,73 +19,13 @@ class GA4TrafficTemplate extends GA4BaseTemplate {
         'bounceRate',
         'conversions',
         'totalRevenue',
+        'transactions',
       ],
     };
   }
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
-    const baseReport = this.getBaseReport();
-    
-    const dateRanges = [{
-      startDate: fromDate,
-      endDate: toDate,
-    }];
-
-    // Allow filtering by specific sources/mediums/campaigns
-    let dimensionFilter = config.dimensionFilter || null;
-    if (config.sources || config.mediums || config.campaigns) {
-      const expressions = [];
-      
-      if (config.sources && Array.isArray(config.sources) && config.sources.length > 0) {
-        expressions.push({
-          field: 'source',
-          op: 'IN',
-          value: config.sources.join(','),
-        });
-      }
-      
-      if (config.mediums && Array.isArray(config.mediums) && config.mediums.length > 0) {
-        expressions.push({
-          field: 'medium',
-          op: 'IN',
-          value: config.mediums.join(','),
-        });
-      }
-      
-      if (config.campaigns && Array.isArray(config.campaigns) && config.campaigns.length > 0) {
-        expressions.push({
-          field: 'campaign',
-          op: 'IN',
-          value: config.campaigns.join(','),
-        });
-      }
-
-      if (expressions.length > 0) {
-        dimensionFilter = { expressions };
-      }
-    }
-
-    const report = {
-      ...baseReport,
-      dateRanges,
-      dimensionFilter,
-      metricFilter: config.metricFilter || null,
-      orderBys: config.orderBys || [
-        { metric: 'sessions', desc: true }
-      ],
-      limit: config.limit || null,
-      offset: config.offset || null,
-    };
-
-    return new this({
-      credentials,
-      report,
-      pipeline: this.getBasePipeline(config),
-      output: {
-        mode: config.outputMode || "envelope",
-        include: config.include || ["periods"],
-      }
-    });
+    return super.forPerformanceAnalysis(credentials, fromDate, toDate, config, null);
   }
 
   static forTrends(credentials, fromDate, toDate, config = {}) {
@@ -130,53 +71,19 @@ class GA4TrafficTemplate extends GA4BaseTemplate {
 
     const baseReport = this.getBaseReport();
     
+    // Allow overriding dimensions and metrics
+    const baseDimensions = config.dimensions || baseReport.dimensions;
+    const metrics = config.metrics || baseReport.metrics;
+    
     // For trends, always include date dimension
-    const dimensions = ['date', ...baseReport.dimensions];
-
-    const dateRanges = [{
-      startDate: formatDate(from),
-      endDate: formatDate(to),
-    }];
-
-    // Allow filtering by specific sources/mediums/campaigns
-    let dimensionFilter = config.dimensionFilter || null;
-    if (config.sources || config.mediums || config.campaigns) {
-      const expressions = [];
-      
-      if (config.sources && Array.isArray(config.sources) && config.sources.length > 0) {
-        expressions.push({
-          field: 'source',
-          op: 'IN',
-          value: config.sources.join(','),
-        });
-      }
-      
-      if (config.mediums && Array.isArray(config.mediums) && config.mediums.length > 0) {
-        expressions.push({
-          field: 'medium',
-          op: 'IN',
-          value: config.mediums.join(','),
-        });
-      }
-      
-      if (config.campaigns && Array.isArray(config.campaigns) && config.campaigns.length > 0) {
-        expressions.push({
-          field: 'campaign',
-          op: 'IN',
-          value: config.campaigns.join(','),
-        });
-      }
-
-      if (expressions.length > 0) {
-        dimensionFilter = { expressions };
-      }
-    }
+    const dimensions = ['date', ...baseDimensions];
 
     const report = {
-      ...baseReport,
       dimensions,
-      dateRanges,
-      dimensionFilter,
+      metrics,
+      from_date: formatDate(from),
+      to_date: formatDate(to),
+      dimensionFilter: config.dimensionFilter || null,
       metricFilter: config.metricFilter || null,
       orderBys: config.orderBys || [
         { dimension: 'date', desc: false },
@@ -195,7 +102,7 @@ class GA4TrafficTemplate extends GA4BaseTemplate {
     const groupByAttributes = this.calculateGroupByAttributes(config);
     if (groupByAttributes.length > 0 || dimensions.length > 0) {
       const aggregates = {};
-      baseReport.metrics.forEach(metric => {
+      metrics.forEach(metric => {
         aggregates[metric] = { fn: "SUM", as: metric };
       });
 
@@ -223,6 +130,8 @@ class GA4TrafficTemplate extends GA4BaseTemplate {
     return new this({
       credentials,
       report,
+      filters: config.filters || [],
+      filterLogic: config.filterLogic || 'AND',
       pipeline,
       output: {
         mode: config.outputMode || "envelope",

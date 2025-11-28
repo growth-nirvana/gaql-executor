@@ -1,6 +1,6 @@
 {
   "name": "@growth-nirvana/gaql-executor",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Composable GAQL executor + pipeline steps for the Google Ads API",
   "license": "MIT",
   "author": "Growth Nirvana",
@@ -47,8 +47,10 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@google-analytics/data": "^4.0.0",
     "facebook-nodejs-business-sdk": "^23.0.1",
     "google-ads-api": "^21.0.1",
+    "google-auth-library": "^9.0.0",
     "googleapis": "^144.0.0"
   },
   "devDependencies": {

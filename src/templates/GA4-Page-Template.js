@@ -20,46 +20,10 @@ class GA4PageTemplate extends GA4BaseTemplate {
   }
 
   static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}) {
-    const baseReport = this.getBaseReport();
-    
-    const dateRanges = [{
-      startDate: fromDate,
-      endDate: toDate,
-    }];
-
-    // Allow filtering by specific page paths
-    let dimensionFilter = config.dimensionFilter || null;
-    if (config.pagePaths && Array.isArray(config.pagePaths) && config.pagePaths.length > 0) {
-      dimensionFilter = {
-        expressions: config.pagePaths.map(pagePath => ({
-          field: 'pagePath',
-          op: config.pagePathMatchType || 'CONTAINS',
-          value: pagePath,
-        })),
-      };
-    }
-
-    const report = {
-      ...baseReport,
-      dateRanges,
-      dimensionFilter,
-      metricFilter: config.metricFilter || null,
-      orderBys: config.orderBys || [
-        { metric: 'screenPageViews', desc: true }
-      ],
-      limit: config.limit || null,
-      offset: config.offset || null,
-    };
-
-    return new this({
-      credentials,
-      report,
-      pipeline: this.getBasePipeline(config),
-      output: {
-        mode: config.outputMode || "envelope",
-        include: config.include || ["periods"],
-      }
-    });
+    const defaultOrderBys = [
+      { metric: 'screenPageViews', desc: true }
+    ];
+    return super.forPerformanceAnalysis(credentials, fromDate, toDate, config, defaultOrderBys);
   }
 
   static forTrends(credentials, fromDate, toDate, config = {}) {
@@ -105,32 +69,18 @@ class GA4PageTemplate extends GA4BaseTemplate {
 
     const baseReport = this.getBaseReport();
     
+    // Allow overriding dimensions and metrics
+    const baseDimensions = config.dimensions || baseReport.dimensions;
+    const metrics = config.metrics || baseReport.metrics;
+    
     // For trends, always include date dimension
-    const dimensions = ['date', ...baseReport.dimensions];
-
-    const dateRanges = [{
-      startDate: formatDate(from),
-      endDate: formatDate(to),
-    }];
-
-    // Allow filtering by specific page paths
-    let dimensionFilter = config.dimensionFilter || null;
-    if (config.pagePaths && Array.isArray(config.pagePaths) && config.pagePaths.length > 0) {
-      dimensionFilter = {
-        expressions: config.pagePaths.map(pagePath => ({
-          field: 'pagePath',
-          op: config.pagePathMatchType || 'CONTAINS',
-          value: pagePath,
-        })),
-      };
-    }
+    const dimensions = ['date', ...baseDimensions];
 
     const report = {
-      ...baseReport,
       dimensions,
-      dateRanges,
-      dimensionFilter,
-      metricFilter: config.metricFilter || null,
+      metrics,
+      from_date: formatDate(from),
+      to_date: formatDate(to),
       orderBys: config.orderBys || [
         { dimension: 'date', desc: false },
         { metric: 'screenPageViews', desc: true }
@@ -148,7 +98,7 @@ class GA4PageTemplate extends GA4BaseTemplate {
     const groupByAttributes = this.calculateGroupByAttributes(config);
     if (groupByAttributes.length > 0 || dimensions.length > 0) {
       const aggregates = {};
-      baseReport.metrics.forEach(metric => {
+      metrics.forEach(metric => {
         aggregates[metric] = { fn: "SUM", as: metric };
       });
 
@@ -162,11 +112,9 @@ class GA4PageTemplate extends GA4BaseTemplate {
       });
     }
 
-    // Add filter step if filters are configured
-    const filterConfig = this.calculateFilters(config);
-    if (filterConfig) {
-      pipeline.push({ use: "filter", ...filterConfig });
-    }
+    // Note: Filters are applied at API level (dimensionFilter/metricFilter)
+    // Post-processing filters can be added here if needed for additional filtering
+    // after grouping, but API-level filters are more efficient
 
     // Add pruneRows by default for trends (unless explicitly disabled)
     if (config.prune !== false && config.pruneRows !== false) {
@@ -176,6 +124,8 @@ class GA4PageTemplate extends GA4BaseTemplate {
     return new this({
       credentials,
       report,
+      filters: config.filters || [],
+      filterLogic: config.filterLogic || 'AND',
       pipeline,
       output: {
         mode: config.outputMode || "envelope",

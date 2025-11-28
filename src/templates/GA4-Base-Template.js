@@ -1,11 +1,61 @@
 const { GA4Executor } = require('../ga4/ga4-executor');
+const { convertFiltersToGA4 } = require('../ga4/ga4-filter');
+const { DIMENSION_MAP, METRIC_MAP } = require('../ga4/ga4-translate');
 
 class GA4BaseTemplate {
   constructor(config) {
     this.credentials = config.credentials;
+    
+    // Convert standard filters to GA4 format if present
+    let report = config.report || {};
+    if (config.filters && Array.isArray(config.filters) && config.filters.length > 0) {
+      const filterConfig = {
+        where: config.filters,
+        logic: config.filterLogic || 'AND',
+      };
+      
+      const ga4Filters = convertFiltersToGA4(filterConfig);
+      
+      // GA4 API requires dimensions used in dimensionFilter to be in the dimensions list
+      // So we automatically add any filtered dimensions to the dimensions array
+      // This abstracts away the API limitation so users can filter on any dimension
+      if (ga4Filters.dimensionFilter) {
+        const existingDimensions = new Set(report.dimensions || []);
+        
+        // Extract dimension fields from filters
+        config.filters.forEach(filter => {
+          if (filter && filter.field) {
+            // Check if it's a dimension (not a metric)
+            const isMetric = METRIC_MAP.hasOwnProperty(filter.field);
+            
+            if (!isMetric) {
+              // Add the dimension field name (not the mapped GA4 name) to dimensions list
+              // The mapping happens in ga4-translate when building the API request
+              if (!existingDimensions.has(filter.field)) {
+                existingDimensions.add(filter.field);
+              }
+            }
+          }
+        });
+        
+        // Update report with expanded dimensions list
+        report = {
+          ...report,
+          dimensions: Array.from(existingDimensions),
+        };
+      }
+      
+      // Merge GA4 filters with any existing filters in report
+      report = {
+        ...report,
+        dimensionFilter: ga4Filters.dimensionFilter || report.dimensionFilter || null,
+        metricFilter: ga4Filters.metricFilter || report.metricFilter || null,
+      };
+    }
+    
     this.config = {
       credentials: this.credentials,
-      report: config.report || {},
+      report,
       pipeline: config.pipeline || [],
       output: config.output || { mode: 'envelope', include: ["periods"] },
     }
@@ -17,6 +67,99 @@ class GA4BaseTemplate {
 
   static getBaseReport() {
     throw new Error('getBaseReport() must be implemented by subclass');
+  }
+
+  /**
+   * Normalize date string to YYYY-MM-DD format for periods step
+   * GA4 API accepts both relative dates ('30daysAgo', 'today') and YYYY-MM-DD
+   * @param {string} dateStr - Date string (relative or YYYY-MM-DD)
+   * @returns {string} - Normalized date in YYYY-MM-DD format
+   */
+  static normalizeDate(dateStr) {
+    if (dateStr === 'today') {
+      const d = new Date();
+      return d.toISOString().split('T')[0];
+    }
+    if (dateStr === 'yesterday') {
+      const d = new Date(Date.now() - 86400000);
+      return d.toISOString().split('T')[0];
+    }
+    if (typeof dateStr === 'string' && dateStr.endsWith('daysAgo')) {
+      const days = parseInt(dateStr);
+      const d = new Date();
+      d.setDate(d.getDate() - days);
+      return d.toISOString().split('T')[0];
+    }
+    // Assume already YYYY-MM-DD format
+    return dateStr;
+  }
+
+  /**
+   * Build report object for performance analysis
+   * @param {Object} config - Configuration object
+   * @param {string} fromDate - Start date
+   * @param {string} toDate - End date
+   * @param {Array} defaultOrderBys - Default orderBys for this template
+   * @returns {Object} - Report configuration object
+   */
+  static buildReportForPerformanceAnalysis(config, fromDate, toDate, defaultOrderBys = null) {
+    const baseReport = this.getBaseReport();
+    
+    // Allow overriding dimensions and metrics
+    const dimensions = config.dimensions || baseReport.dimensions;
+    const metrics = config.metrics || baseReport.metrics;
+
+    // Normalize dates for periods step
+    const normalizedFromDate = this.normalizeDate(fromDate);
+    const normalizedToDate = this.normalizeDate(toDate);
+
+    return {
+      dimensions,
+      metrics,
+      from_date: normalizedFromDate,
+      to_date: normalizedToDate,
+      orderBys: config.orderBys || defaultOrderBys || null,
+      limit: config.limit || null,
+      offset: config.offset || null,
+    };
+  }
+
+  /**
+   * Build pipeline for performance analysis
+   * @param {Object} config - Configuration object
+   * @returns {Array} - Pipeline steps array
+   */
+  static buildPerformanceAnalysisPipeline(config) {
+    return [
+      { use: "periods", baseline: { mode: config.baselineMode || config.periodsBaselineMode || "previous_period" } },
+      ...this.getBasePipeline(config),
+    ];
+  }
+
+  /**
+   * Create template instance for performance analysis
+   * @param {Object} credentials - GA4 credentials
+   * @param {string} fromDate - Start date
+   * @param {string} toDate - End date
+   * @param {Object} config - Configuration object
+   * @param {Array} defaultOrderBys - Default orderBys for this template
+   * @returns {GA4BaseTemplate} - Template instance
+   */
+  static forPerformanceAnalysis(credentials, fromDate, toDate, config = {}, defaultOrderBys = null) {
+    const report = this.buildReportForPerformanceAnalysis(config, fromDate, toDate, defaultOrderBys);
+    const pipeline = this.buildPerformanceAnalysisPipeline(config);
+
+    return new this({
+      credentials,
+      report,
+      filters: config.filters || [],
+      filterLogic: config.filterLogic || 'AND',
+      pipeline,
+      output: {
+        mode: config.outputMode || "envelope",
+        include: config.include || ["periods"],
+      }
+    });
   }
 
   // Generic method to get filter configuration from config
@@ -50,14 +193,17 @@ class GA4BaseTemplate {
   }
 
   // Generic method to get group by attributes from config
+  // Supports both config.attributes (for filtering) and config.dimensions (for overriding)
   static calculateGroupByAttributes(config) {
     const baseReport = this.getBaseReport();
-    const allowedDimensions = baseReport.dimensions || [];
+    // If dimensions are explicitly provided, use those; otherwise use base dimensions
+    const availableDimensions = config.dimensions || baseReport.dimensions || [];
     
     if (config.attributes && config.attributes.length > 0) {
-      return config.attributes.filter(attr => allowedDimensions.includes(attr));
+      // Filter attributes against available dimensions
+      return config.attributes.filter(attr => availableDimensions.includes(attr));
     } else {
-      return allowedDimensions;
+      return availableDimensions;
     }
   }
 
@@ -69,7 +215,8 @@ class GA4BaseTemplate {
     const groupByAttributes = this.calculateGroupByAttributes(config);
     if (groupByAttributes.length > 0) {
       const baseReport = this.getBaseReport();
-      const metrics = baseReport.metrics || [];
+      // Allow overriding metrics
+      const metrics = config.metrics || baseReport.metrics || [];
       
       // Build aggregates for metrics
       const aggregates = {};
@@ -87,12 +234,10 @@ class GA4BaseTemplate {
       });
     }
 
-    // Add filter step if filters are configured
-    const filterConfig = this.calculateFilters(config);
-    if (filterConfig) {
-      pipeline.push({ use: "filter", ...filterConfig });
-    }
-
+    // Note: Filters are applied at API level (dimensionFilter/metricFilter)
+    // Post-processing filters can be added here if needed for additional filtering
+    // after grouping, but API-level filters are more efficient
+    
     return pipeline;
   }
 

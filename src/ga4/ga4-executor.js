@@ -1,5 +1,6 @@
 // src/ga4/ga4-executor.js
-const { google } = require('googleapis');
+const {BetaAnalyticsDataClient} = require('@google-analytics/data');
+const {GoogleAuth} = require('google-auth-library');
 const { buildGA4Request, shapeRow } = require('./ga4-translate');
 const { STEPS } = require('../step-registry');
 
@@ -17,6 +18,10 @@ class GA4Executor {
       report: {
         dimensions: options.report?.dimensions || [],
         metrics: options.report?.metrics || [],
+        // Support standard from_date/to_date interface (like Google Ads)
+        from_date: options.report?.from_date,
+        to_date: options.report?.to_date,
+        // Also support legacy dateRanges format
         dateRanges: options.report?.dateRanges || [],
         dimensionFilter: options.report?.dimensionFilter || null,
         metricFilter: options.report?.metricFilter || null,
@@ -37,8 +42,7 @@ class GA4Executor {
         include: (options.output && options.output.include) || ["periods"]
       }
     };
-    this.client = null;
-    this.analyticsData = null;
+    this.analyticsDataClient = null;
   }
 
   /**
@@ -46,8 +50,8 @@ class GA4Executor {
    * @returns {Object} - The Analytics Data API client instance
    */
   initializeClient() {
-    if (this.client) {
-      return this.client;
+    if (this.analyticsDataClient) {
+      return this.analyticsDataClient;
     }
 
     const { credentials: { refreshToken, clientId, clientSecret } } = this.options;
@@ -58,22 +62,22 @@ class GA4Executor {
       throw new Error(`Missing required credentials: ${missing.join(', ')}`);
     }
 
-    // Create OAuth2 client
-    const oauth2Client = new google.auth.OAuth2(
-      clientId,
-      clientSecret,
-      'urn:ietf:wg:oauth:2.0:oob' // Redirect URI for installed apps
-    );
-
-    oauth2Client.setCredentials({
-      refresh_token: refreshToken
+    // Create GoogleAuth with OAuth2 credentials
+    const auth = new GoogleAuth({
+      credentials: {
+        client_id: clientId,
+        client_secret: clientSecret,
+        refresh_token: refreshToken,
+        type: 'authorized_user'
+      }
     });
 
     // Create Analytics Data API client
-    this.analyticsData = google.analyticsdata('v1beta');
-    this.client = oauth2Client;
+    this.analyticsDataClient = new BetaAnalyticsDataClient({
+      auth
+    });
 
-    return this.client;
+    return this.analyticsDataClient;
   }
 
   isCardinalityChanging(name) {
@@ -200,15 +204,22 @@ class GA4Executor {
     
     while (retryCount <= maxRetries) {
       try {
-        const response = await this.analyticsData.properties.runReport({
-          auth: this.client,
-          ...request,
-        });
-
-        raw = response.data.rows || [];
+        // Remove null/undefined values and empty arrays from request
+        const cleanRequest = {};
+        for (const [key, value] of Object.entries(request)) {
+          if (value === null || value === undefined) continue;
+          if (Array.isArray(value) && value.length === 0) continue;
+          cleanRequest[key] = value;
+        }
+        
+        const [response] = await this.analyticsDataClient.runReport(cleanRequest);
+        raw = response.rows || [];
         break; // Success, exit retry loop
       } catch (e) {
-        const msg = String(e?.message || "");
+        const msg = String(e?.message || e?.toString() || "");
+        // Extract detailed error message if available
+        const errorDetails = e?.details || e?.cause?.message || "";
+        const fullMsg = errorDetails ? `${msg} ${errorDetails}` : msg;
         const isRateLimit = e?.code === 429 || msg.includes("rate limit") || msg.includes("too many requests");
         const isQuotaExceeded = e?.code === 429 || msg.includes("quota") || msg.includes("QuotaExceeded");
 
@@ -219,7 +230,9 @@ class GA4Executor {
         } else if ((isRateLimit || isQuotaExceeded) && retryCount >= maxRetries) {
           throw new Error(`Rate limit/quota error after ${maxRetries} retries: ${msg}`);
         } else {
-          throw e;
+          // Include full error message
+          const errorMsg = fullMsg || msg || String(e);
+          throw new Error(errorMsg);
         }
       }
     }

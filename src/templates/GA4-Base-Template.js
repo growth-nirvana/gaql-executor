@@ -1,3 +1,4 @@
+// https://developers.google.com/analytics/devguides/reporting/data/v1/rest
 const { GA4Executor } = require('../ga4/ga4-executor');
 const { convertFiltersToGA4 } = require('../ga4/ga4-filter');
 const { DIMENSION_MAP, METRIC_MAP } = require('../ga4/ga4-translate');

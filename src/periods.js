@@ -19,6 +19,28 @@ function lastDomUTC(year, monthIndex0) {
 function endOfMonthUTC(d) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0));
 }
+function startOfMonthUTC(d) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
+}
+function getPreviousFullMonth(fromDate) {
+  // Get the month of the from_date, go back one month, return full month range
+  const from = parseYmd(fromDate);
+  if (!from) return null;
+  
+  // Go back one month
+  const prevMonth = shiftMonthClamp(from, -1);
+  const prevYear = prevMonth.getUTCFullYear();
+  const prevMonthIndex = prevMonth.getUTCMonth();
+  
+  // Get first and last day of that month
+  const firstDay = new Date(Date.UTC(prevYear, prevMonthIndex, 1));
+  const lastDay = endOfMonthUTC(firstDay);
+  
+  return {
+    from_date: formatYmd(firstDay),
+    to_date: formatYmd(lastDay)
+  };
+}
 function shiftYearClamp(d, dy) {
   const y = d.getUTCFullYear() + dy;
   const m = d.getUTCMonth();
@@ -55,7 +77,7 @@ function labelRange(fromIso, toIso) {
  * cfg:
  * {
  *   baseline?: {
- *     mode?: "previous_period" | "previous_year" | "yoy" | "previous_month_same_span"
+ *     mode?: "previous_period" | "previous_year" | "yoy" | "previous_month_same_span" | "previous_full_month"
  *   },
  *   granularity?: "daily" | "weekly" | "monthly" // Optional: time granularity for trends
  * }
@@ -90,6 +112,19 @@ function periodsStep(rows, cfg = {}, ctx) {
     const monthEnd = endOfMonthUTC(baseFrom);
     baseTo = candidateEnd <= monthEnd ? candidateEnd : monthEnd;
 
+  } else if (mode === "previous_full_month") {
+    // Full previous calendar month (1st through last day of previous month)
+    const prevMonth = getPreviousFullMonth(fromIso);
+    if (prevMonth) {
+      baseFrom = parseYmd(prevMonth.from_date);
+      baseTo = parseYmd(prevMonth.to_date);
+    } else {
+      // Fallback to previous_period if date parsing fails
+      const prevTo = new Date(f.getTime() - 86400000);
+      baseTo = prevTo;
+      baseFrom = new Date(prevTo.getTime() - (L - 1) * 86400000);
+    }
+
   } else {
     // previous_period (default): same length ending the day before current.from
     const prevTo = new Date(f.getTime() - 86400000);
@@ -120,8 +155,9 @@ function periodsStep(rows, cfg = {}, ctx) {
       // strategy is informational; consumers can rely on matched_upto_day for equality
       strategy:
         mode === "previous_year" || mode === "yoy" ? "calendar" :
-        mode === "previous_month_same_span"        ? (baseLen === currentLen ? "same_length" : "calendar_slice") :
-                                                     "same_length",
+        mode === "previous_full_month" ? "full_month" :
+        mode === "previous_month_same_span" ? (baseLen === currentLen ? "same_length" : "calendar_slice") :
+                                               "same_length",
       matched_upto_day: baseLen === currentLen,
       timezone: "UTC"
     }

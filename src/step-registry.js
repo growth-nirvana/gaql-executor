@@ -20,6 +20,8 @@ const { derive } = require("./derive");
 const { rollupEnvelopeStep } = require("./rollup-envelope");
 const { filterStep } = require("./filter");
 const { timePeriodDigestStep } = require("./time-period-digest");
+const { ga4FetchBaselineAggregationsStep } = require("./google-analytics/ga4-fetch-baseline-aggregations");
+const { ga4RollupEnvelopeStep } = require("./google-analytics/ga4-rollup-envelope");
 
 function withTraits(fn, traits) {
   fn.traits = traits;
@@ -105,6 +107,14 @@ const STEPS = {
   ),
   pruneRows: (fn => (fn.traits = { phase: "post", changesCardinality: true }, fn))(
     (rows, cfg, ctx) => pruneRowsStep(rows, cfg, ctx)
+  ),
+  // GA4-specific steps
+  ga4FetchBaselineAggregations: withTraits(
+    async (rows, cfg, ctx) => ga4FetchBaselineAggregationsStep(rows, cfg, ctx),
+    { phase: "post", changesCardinality: false }
+  ),
+  ga4RollupEnvelope: (fn => (fn.traits = { phase: "post", changesCardinality: false }, fn))(
+    (rows, cfg, ctx) => ga4RollupEnvelopeStep(rows, cfg, ctx)
   ),
 };
 

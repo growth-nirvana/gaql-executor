@@ -147,7 +147,11 @@ async function deltaAugment(rows, cfg = {}, ctx) {
   }
 
   // 3) fetch & group previous
-  const prevRaw      = await ctx.fetch({ from_date: baseline.from_date, to_date: baseline.to_date }, "previous");
+  // ctx.fetch() may return { rows, aggregations } (GA4) or just rows (other platforms)
+  const prevRawResult = await ctx.fetch({ from_date: baseline.from_date, to_date: baseline.to_date }, "previous");
+  const prevRaw = prevRawResult && typeof prevRawResult === 'object' && 'rows' in prevRawResult 
+    ? prevRawResult.rows 
+    : prevRawResult; // Backward compatibility: if not GA4 format, use directly
   
   // CRITICAL: Update stored filterConversionActions config with baseline dates
   // This ensures filterConversionActions (which runs in runPre) uses the correct previous period dates

@@ -114,7 +114,7 @@ class GA4BaseTemplate {
     const normalizedFromDate = this.normalizeDate(fromDate);
     const normalizedToDate = this.normalizeDate(toDate);
 
-    return {
+    const report = {
       dimensions,
       metrics,
       from_date: normalizedFromDate,
@@ -123,6 +123,14 @@ class GA4BaseTemplate {
       limit: config.limit || null,
       offset: config.offset || null,
     };
+
+    // GA4-specific: metric aggregations (TOTAL, MAXIMUM, MINIMUM)
+    // Useful for metrics that aren't aggregatable due to GA4's opaque practices
+    if (config.metricAggregations && Array.isArray(config.metricAggregations) && config.metricAggregations.length > 0) {
+      report.metricAggregations = config.metricAggregations;
+    }
+
+    return report;
   }
 
   /**
@@ -131,10 +139,31 @@ class GA4BaseTemplate {
    * @returns {Array} - Pipeline steps array
    */
   static buildPerformanceAnalysisPipeline(config) {
-    return [
+    const baseReport = this.getBaseReport();
+    const metrics = config.metrics || baseReport.metrics || [];
+    
+    const pipeline = [
       { use: "periods", baseline: { mode: config.baselineMode || config.periodsBaselineMode || "previous_period" } },
       ...this.getBasePipeline(config),
     ];
+    
+    // Add GA4 rollup steps if metricAggregations was requested
+    if (config.metricAggregations && Array.isArray(config.metricAggregations) && config.metricAggregations.length > 0) {
+      // Fetch baseline aggregations
+      pipeline.push({
+        use: "ga4FetchBaselineAggregations",
+      });
+      
+      // Create account rollup using aggregations
+      pipeline.push({
+        use: "ga4RollupEnvelope",
+        as: "account_rollup",
+        metrics: metrics, // Pass metric names in order
+        ratios: config.rollupRatios || [], // Optional: allow configurable ratios
+      });
+    }
+    
+    return pipeline;
   }
 
   /**
@@ -158,7 +187,7 @@ class GA4BaseTemplate {
       pipeline,
       output: {
         mode: config.outputMode || "envelope",
-        include: config.include || ["periods"],
+        include: config.include || (config.metricAggregations ? ["periods", "account_rollup"] : ["periods"]),
       }
     });
   }

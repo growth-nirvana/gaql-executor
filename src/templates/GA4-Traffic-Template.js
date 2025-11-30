@@ -93,6 +93,11 @@ class GA4TrafficTemplate extends GA4BaseTemplate {
       offset: config.offset || null,
     };
 
+    // GA4-specific: metric aggregations (TOTAL, MAXIMUM, MINIMUM)
+    if (config.metricAggregations && Array.isArray(config.metricAggregations) && config.metricAggregations.length > 0) {
+      report.metricAggregations = config.metricAggregations;
+    }
+
     // Build pipeline for trends
     const pipeline = [
       { use: "periods", baseline: { mode: config.baselineMode || "previous_period" }, granularity: granularity },

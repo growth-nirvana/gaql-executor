@@ -78,6 +78,7 @@ function buildGA4Request(report, propertyId) {
     limit = null,
     offset = null,
     keepEmptyRows = false,
+    metricAggregations = null,
   } = report;
 
   // Map dimensions to GA4 API format
@@ -175,6 +176,12 @@ function buildGA4Request(report, propertyId) {
   // Keep empty rows (only if true)
   if (keepEmptyRows === true) {
     request.keepEmptyRows = keepEmptyRows;
+  }
+
+  // Add metric aggregations if provided (GA4-specific feature)
+  // Valid values: 'TOTAL', 'MINIMUM', 'MAXIMUM', 'COUNT'
+  if (metricAggregations && Array.isArray(metricAggregations) && metricAggregations.length > 0) {
+    request.metricAggregations = metricAggregations;
   }
 
   return request;
@@ -349,8 +356,13 @@ function mapNumericOperation(op) {
  * @param {Array} metrics - Metric names
  * @returns {Object} - Shaped row
  */
-function shapeRow(row, dimensions = [], metrics = []) {
+function shapeRow(row, dimensions = [], metrics = [], propertyId = null) {
   const shaped = {};
+
+  // Add propertyId if provided
+  if (propertyId) {
+    shaped.propertyId = propertyId;
+  }
 
   // Map dimensions
   if (row.dimensionValues) {

@@ -29,6 +29,8 @@ class GA4Executor {
         limit: options.report?.limit || null,
         offset: options.report?.offset || null,
         keepEmptyRows: options.report?.keepEmptyRows || false,
+        // GA4-specific: metric aggregations
+        metricAggregations: options.report?.metricAggregations || null,
       },
       credentials: {
         propertyIds: propertyIds,
@@ -112,8 +114,9 @@ class GA4Executor {
       fetch: async (overrides = {}, tag = "default") => {
         // Allow steps (like delta) to fetch a different time window
         const report = { ...this.options.report, ...overrides };
-        const { rows } = await this.fetchReport(report);
-        return rows;
+        const { rows, aggregations } = await this.fetchReport(report);
+        // Return both rows and aggregations for GA4-specific steps
+        return { rows, aggregations };
       },
       runWithSteps,
     };
@@ -153,12 +156,17 @@ class GA4Executor {
       // Fetch from ALL properties and combine
       fetch: async (overrides = {}, tag = "default") => {
         const allRows = [];
+        const allAggregations = [];
         for (const propertyInstance of propertyInstances) {
           const finalReport = this.overrideReportOptions(baseReport, overrides);
-          const { rows } = await this.fetchReportForProperty(finalReport, propertyInstance.propertyId);
+          const { rows, aggregations } = await this.fetchReportForProperty(finalReport, propertyInstance.propertyId);
           allRows.push(...rows);
+          if (aggregations) {
+            allAggregations.push({ propertyId: propertyInstance.propertyId, ...aggregations });
+          }
         }
-        return allRows;
+        // Return both rows and aggregations for GA4-specific steps
+        return { rows: allRows, aggregations: allAggregations };
       },
       runWithSteps,
     };
@@ -197,6 +205,7 @@ class GA4Executor {
     const { dimensions = [], metrics = [] } = report;
 
     let raw;
+    let aggregations = null;
     const maxRetries = 5;
     const baseBackoff = 2; // seconds
     const maxBackoff = 300; // 5 minutes max
@@ -205,15 +214,34 @@ class GA4Executor {
     while (retryCount <= maxRetries) {
       try {
         // Remove null/undefined values and empty arrays from request
+        // BUT keep metricAggregations even if it's an array (it's a valid GA4 parameter)
         const cleanRequest = {};
         for (const [key, value] of Object.entries(request)) {
           if (value === null || value === undefined) continue;
-          if (Array.isArray(value) && value.length === 0) continue;
-          cleanRequest[key] = value;
+          // Keep metricAggregations - it's a valid array parameter for GA4
+          if (key === 'metricAggregations' && Array.isArray(value)) {
+            cleanRequest[key] = value;
+          } else if (Array.isArray(value) && value.length === 0) {
+            continue;
+          } else {
+            cleanRequest[key] = value;
+          }
         }
         
         const [response] = await this.analyticsDataClient.runReport(cleanRequest);
         raw = response.rows || [];
+        
+        // Store aggregated values if metricAggregations were requested
+        // GA4 API returns totals, maximums, minimums arrays when metricAggregations is specified
+        // These are stored separately and returned in the aggregations field
+        if (cleanRequest.metricAggregations) {
+          aggregations = {
+            totals: response.totals || [],
+            maximums: response.maximums || [],
+            minimums: response.minimums || [],
+          };
+        }
+        
         break; // Success, exit retry loop
       } catch (e) {
         const msg = String(e?.message || e?.toString() || "");
@@ -237,9 +265,10 @@ class GA4Executor {
       }
     }
 
-    // Shape rows to our standard format
-    const rows = raw.map((row) => shapeRow(row, dimensions, metrics));
-    return { rows, raw };
+    // Shape rows to our standard format, including propertyId
+    const rows = raw.map((row) => shapeRow(row, dimensions, metrics, propertyId));
+    
+    return { rows, raw, aggregations };
   }
 
   /**
@@ -332,6 +361,7 @@ class GA4Executor {
 
     // Fetch raw data from all properties
     const allRows = [];
+    const allAggregations = [];
     const propertyInstances = [];
     const propertyResults = {
       succeeded: [],
@@ -340,8 +370,11 @@ class GA4Executor {
 
     for (const propertyId of propertyIds) {
       try {
-        const { rows } = await this.fetchReportForProperty(this.options.report, propertyId);
+        const { rows, aggregations } = await this.fetchReportForProperty(this.options.report, propertyId);
         allRows.push(...rows);
+        if (aggregations) {
+          allAggregations.push({ propertyId, ...aggregations });
+        }
         propertyInstances.push({ propertyId });
         propertyResults.succeeded.push({
           propertyId,
@@ -366,6 +399,12 @@ class GA4Executor {
       ? this.buildContext()
       : this.buildContextMultiProperty(propertyInstances);
     
+    // Store current aggregations in context state for rollup step
+    // Always store as array for consistency
+    if (allAggregations && allAggregations.length > 0) {
+      ctx.state.ga4CurrentAggregations = allAggregations;
+    }
+    
     const processed = await this.runPipeline(allRows, ctx);
 
     // Format output
@@ -376,6 +415,14 @@ class GA4Executor {
         meta, 
         results: processed
       };
+      
+      // Add metric aggregations if present (GA4-specific)
+      // Include even if arrays are empty - the structure itself is useful
+      if (allAggregations && allAggregations.length > 0) {
+        result.aggregations = propertyIds.length === 1 
+          ? allAggregations[0]
+          : allAggregations;
+      }
       
       // Add property results summary for multi-property queries
       if (propertyIds.length > 1) {

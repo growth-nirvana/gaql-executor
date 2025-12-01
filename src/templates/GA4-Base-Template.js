@@ -138,11 +138,38 @@ class GA4BaseTemplate {
   static buildPerformanceAnalysisPipeline(config) {
     const baseReport = this.getBaseReport();
     const metrics = config.metrics || baseReport.metrics || [];
+    const baselineMode = config.periodsBaselineMode || "previous_period";
     
     const pipeline = [
-      { use: "periods", baseline: { mode: config.periodsBaselineMode || "previous_period" } },
+      { use: "periods", baseline: { mode: baselineMode } },
       ...this.getBasePipeline(config),
     ];
+    
+    // Add delta step automatically (like Google Ads and Facebook)
+    // This computes metrics_prev, metrics_delta, and metrics_delta_pct for each row
+    const groupByAttributes = this.calculateGroupByAttributes(config);
+    if (groupByAttributes.length > 0 && metrics.length > 0) {
+      // Build measures from metrics - all are absolute (GA4 metrics are already aggregated)
+      // GA4 rows have metrics as direct fields (e.g., "sessions", "totalUsers"), not "metrics.sessions"
+      const measures = metrics.map(metric => ({
+        field: metric,
+        kind: "absolute"
+      }));
+      
+      pipeline.push({
+        use: "delta",
+        baseline: { mode: baselineMode },
+        partial: { policy: "match_upto_day" },
+        keys: groupByAttributes,
+        measures: measures,
+        emit: {
+          previous: "metrics_prev",
+          delta_abs: "metrics_delta",
+          delta_pct: "metrics_delta_pct"
+        },
+        policies: { pctOnZero: "null" }
+      });
+    }
     
     // Always add GA4 rollup steps (metricAggregations are always enabled)
     // Fetch baseline aggregations

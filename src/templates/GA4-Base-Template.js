@@ -124,11 +124,8 @@ class GA4BaseTemplate {
       offset: config.offset || null,
     };
 
-    // GA4-specific: metric aggregations (TOTAL, MAXIMUM, MINIMUM)
-    // Useful for metrics that aren't aggregatable due to GA4's opaque practices
-    if (config.metricAggregations && Array.isArray(config.metricAggregations) && config.metricAggregations.length > 0) {
-      report.metricAggregations = config.metricAggregations;
-    }
+    // GA4-specific: Always request metric aggregations for account rollup
+    report.metricAggregations = ['TOTAL', 'MAXIMUM', 'MINIMUM'];
 
     return report;
   }
@@ -143,25 +140,23 @@ class GA4BaseTemplate {
     const metrics = config.metrics || baseReport.metrics || [];
     
     const pipeline = [
-      { use: "periods", baseline: { mode: config.baselineMode || config.periodsBaselineMode || "previous_period" } },
+      { use: "periods", baseline: { mode: config.periodsBaselineMode || "previous_period" } },
       ...this.getBasePipeline(config),
     ];
     
-    // Add GA4 rollup steps if metricAggregations was requested
-    if (config.metricAggregations && Array.isArray(config.metricAggregations) && config.metricAggregations.length > 0) {
-      // Fetch baseline aggregations
-      pipeline.push({
-        use: "ga4FetchBaselineAggregations",
-      });
-      
-      // Create account rollup using aggregations
-      pipeline.push({
-        use: "ga4RollupEnvelope",
-        as: "account_rollup",
-        metrics: metrics, // Pass metric names in order
-        ratios: config.rollupRatios || [], // Optional: allow configurable ratios
-      });
-    }
+    // Always add GA4 rollup steps (metricAggregations are always enabled)
+    // Fetch baseline aggregations
+    pipeline.push({
+      use: "ga4FetchBaselineAggregations",
+    });
+    
+    // Create account rollup using aggregations
+    pipeline.push({
+      use: "ga4RollupEnvelope",
+      as: "account_rollup",
+      metrics: metrics, // Pass metric names in order
+      ratios: config.rollupRatios || [], // Optional: allow configurable ratios
+    });
     
     return pipeline;
   }
@@ -187,7 +182,7 @@ class GA4BaseTemplate {
       pipeline,
       output: {
         mode: config.outputMode || "envelope",
-        include: config.include || (config.metricAggregations ? ["periods", "account_rollup"] : ["periods"]),
+        include: config.include || ["periods", "account_rollup"],
       }
     });
   }

@@ -19,14 +19,13 @@ const DIMENSION_MAP = {
   'sessionSource': 'sessionSource',
   'sessionMedium': 'sessionMedium',
   'sessionCampaign': 'sessionCampaignName',
+  'sessionDefaultChannelGroup': 'sessionDefaultChannelGroup',
+  'sessionSourceMedium': 'sessionSourceMedium',
   // First user-scoped dimensions (for user acquisition analysis)
   'firstUserSource': 'firstUserSource',
   'firstUserMedium': 'firstUserMedium',
   'firstUserCampaign': 'firstUserCampaignName',
-  // Legacy aliases - map to session-scoped for backward compatibility
-  'source': 'sessionSource',
-  'medium': 'sessionMedium',
-  'campaign': 'sessionCampaignName',
+  'firstUserDefaultChannelGroup': 'firstUserDefaultChannelGroup',
   'deviceCategory': 'deviceCategory',
   'country': 'country',
   'city': 'city',

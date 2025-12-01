@@ -89,10 +89,8 @@ class GA4PageTemplate extends GA4BaseTemplate {
       offset: config.offset || null,
     };
 
-    // GA4-specific: metric aggregations (TOTAL, MAXIMUM, MINIMUM)
-    if (config.metricAggregations && Array.isArray(config.metricAggregations) && config.metricAggregations.length > 0) {
-      report.metricAggregations = config.metricAggregations;
-    }
+    // GA4-specific: Always request metric aggregations for account rollup
+    report.metricAggregations = ['TOTAL', 'MAXIMUM', 'MINIMUM'];
 
     // Build pipeline for trends
     const pipeline = [
@@ -121,10 +119,6 @@ class GA4PageTemplate extends GA4BaseTemplate {
     // Post-processing filters can be added here if needed for additional filtering
     // after grouping, but API-level filters are more efficient
 
-    // Add pruneRows by default for trends (unless explicitly disabled)
-    if (config.prune !== false && config.pruneRows !== false) {
-      pipeline.push({ use: "pruneRows", mode: "empty", as: "rows_meta" });
-    }
 
     return new this({
       credentials,

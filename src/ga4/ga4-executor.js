@@ -204,66 +204,110 @@ class GA4Executor {
     const request = buildGA4Request(report, propertyId);
     const { dimensions = [], metrics = [] } = report;
 
-    let raw;
+    // Pagination settings
+    const pageAll = report.parameters?.page_all !== false; // Default to true
+    const maxPages = Number.isFinite(report.parameters?.max_pages) ? report.parameters.max_pages : 100;
+    const defaultLimit = 10000; // GA4 max is 100000, but use 10000 for reasonable page size
+    const requestLimit = request.limit || defaultLimit;
+
+    let raw = [];
     let aggregations = null;
     const maxRetries = 5;
     const baseBackoff = 2; // seconds
     const maxBackoff = 300; // 5 minutes max
-    let retryCount = 0;
     
-    while (retryCount <= maxRetries) {
-      try {
-        // Remove null/undefined values and empty arrays from request
-        // BUT keep metricAggregations even if it's an array (it's a valid GA4 parameter)
-        const cleanRequest = {};
-        for (const [key, value] of Object.entries(request)) {
-          if (value === null || value === undefined) continue;
-          // Keep metricAggregations - it's a valid array parameter for GA4
-          if (key === 'metricAggregations' && Array.isArray(value)) {
-            cleanRequest[key] = value;
-          } else if (Array.isArray(value) && value.length === 0) {
-            continue;
+    // Pagination loop
+    let offset = request.offset || 0;
+    let pages = 0;
+    let totalRowCount = null;
+    
+    while (pages < maxPages) {
+      let retryCount = 0;
+      let pageSuccess = false;
+      
+      while (retryCount <= maxRetries && !pageSuccess) {
+        try {
+          // Build request for this page
+          const pageRequest = { ...request, limit: requestLimit, offset };
+          
+          // Remove null/undefined values and empty arrays from request
+          // BUT keep metricAggregations even if it's an array (it's a valid GA4 parameter)
+          const cleanRequest = {};
+          for (const [key, value] of Object.entries(pageRequest)) {
+            if (value === null || value === undefined) continue;
+            // Keep metricAggregations - it's a valid array parameter for GA4
+            if (key === 'metricAggregations' && Array.isArray(value)) {
+              cleanRequest[key] = value;
+            } else if (Array.isArray(value) && value.length === 0) {
+              continue;
+            } else {
+              cleanRequest[key] = value;
+            }
+          }
+          
+          const [response] = await this.analyticsDataClient.runReport(cleanRequest);
+          const pageRows = response.rows || [];
+          raw.push(...pageRows);
+          
+          // Store total row count from first page
+          if (totalRowCount === null && response.rowCount !== undefined) {
+            totalRowCount = response.rowCount;
+          }
+          
+          // Store aggregated values from first page only (aggregations are totals across all data)
+          if (pages === 0 && cleanRequest.metricAggregations) {
+            aggregations = {
+              totals: response.totals || [],
+              maximums: response.maximums || [],
+              minimums: response.minimums || [],
+            };
+          }
+          
+          pages++;
+          pageSuccess = true;
+          
+          // Check if we need to fetch more pages
+          if (!pageAll || pageRows.length < requestLimit || (totalRowCount !== null && raw.length >= totalRowCount)) {
+            // All data fetched
+            break;
+          }
+          
+          // Increment offset for next page
+          offset += pageRows.length;
+          
+          // Add small delay between pages to avoid rate limits
+          if (pages < maxPages) {
+            await new Promise(resolve => setTimeout(resolve, 200)); // 200ms delay
+          }
+          
+        } catch (e) {
+          const msg = String(e?.message || e?.toString() || "");
+          const errorDetails = e?.details || e?.cause?.message || "";
+          const fullMsg = errorDetails ? `${msg} ${errorDetails}` : msg;
+          const isRateLimit = e?.code === 429 || msg.includes("rate limit") || msg.includes("too many requests");
+          const isQuotaExceeded = e?.code === 429 || msg.includes("quota") || msg.includes("QuotaExceeded");
+
+          if ((isRateLimit || isQuotaExceeded) && retryCount < maxRetries) {
+            retryCount++;
+            const backoffSeconds = Math.min(baseBackoff ** retryCount, maxBackoff);
+            await new Promise(resolve => setTimeout(resolve, backoffSeconds * 1000));
+          } else if ((isRateLimit || isQuotaExceeded) && retryCount >= maxRetries) {
+            throw new Error(`Rate limit/quota error after ${maxRetries} retries: ${msg}`);
           } else {
-            cleanRequest[key] = value;
+            // Not a retryable error, throw immediately
+            const errorMsg = fullMsg || msg || String(e);
+            throw new Error(errorMsg);
           }
         }
-        
-        const [response] = await this.analyticsDataClient.runReport(cleanRequest);
-        raw = response.rows || [];
-        
-        // Store aggregated values if metricAggregations were requested
-        // GA4 API returns totals, maximums, minimums arrays when metricAggregations is specified
-        // These are stored separately and returned in the aggregations field
-        if (cleanRequest.metricAggregations) {
-          aggregations = {
-            totals: response.totals || [],
-            maximums: response.maximums || [],
-            minimums: response.minimums || [],
-          };
-        }
-        
-        break; // Success, exit retry loop
-      } catch (e) {
-        const msg = String(e?.message || e?.toString() || "");
-        // Extract detailed error message if available
-        const errorDetails = e?.details || e?.cause?.message || "";
-        const fullMsg = errorDetails ? `${msg} ${errorDetails}` : msg;
-        const isRateLimit = e?.code === 429 || msg.includes("rate limit") || msg.includes("too many requests");
-        const isQuotaExceeded = e?.code === 429 || msg.includes("quota") || msg.includes("QuotaExceeded");
-
-        if ((isRateLimit || isQuotaExceeded) && retryCount < maxRetries) {
-          retryCount++;
-          const backoffSeconds = Math.min(baseBackoff ** retryCount, maxBackoff);
-          await new Promise(resolve => setTimeout(resolve, backoffSeconds * 1000));
-        } else if ((isRateLimit || isQuotaExceeded) && retryCount >= maxRetries) {
-          throw new Error(`Rate limit/quota error after ${maxRetries} retries: ${msg}`);
-        } else {
-          // Include full error message
-          const errorMsg = fullMsg || msg || String(e);
-          throw new Error(errorMsg);
-        }
+      }
+      
+      // Exit pagination loop if page failed or all data fetched
+      if (!pageSuccess || raw.length >= (totalRowCount || Infinity)) {
+        break;
       }
     }
+    
+    // Success - all pages fetched
 
     // Shape rows to our standard format, including propertyId
     const rows = raw.map((row) => shapeRow(row, dimensions, metrics, propertyId));
